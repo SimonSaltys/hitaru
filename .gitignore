@@ -1,0 +1,4 @@
+node_modules
+dist
+aligner/.venv
+__pycache__
