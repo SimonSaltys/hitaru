@@ -1,6 +1,7 @@
 import { CATEGORIES, type AppData, type Category, type Session, type Settings } from "./types";
 
 const DATA_KEY = "hitaru.data.v1";
+const MIGRATED_KEY = "hitaru.data.v1.migrated";
 
 export const DEFAULT_SETTINGS: Settings = { weeklyGoalHours: 7, priorHours: 0 };
 
@@ -12,7 +13,7 @@ export function newId(): string {
   return crypto.randomUUID();
 }
 
-function parseSession(raw: unknown): Session | null {
+export function parseSession(raw: unknown): Session | null {
   if (typeof raw !== "object" || raw === null) return null;
   const s = raw as Record<string, unknown>;
   if (typeof s.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s.date)) return null;
@@ -58,22 +59,136 @@ export function parseData(json: string): AppData {
   };
 }
 
-export function loadData(): AppData {
-  const stored = localStorage.getItem(DATA_KEY);
-  // A corrupt store must not be silently replaced: let the error reach the caller.
-  return stored === null ? emptyData() : parseData(stored);
+interface Stored {
+  revision: string;
+  text: string | null;
+  path: string;
 }
 
-export function saveData(data: AppData): void {
-  localStorage.setItem(DATA_KEY, JSON.stringify(data));
+/** Another tab or address saved first. `data` is what's on disk now. */
+export class SaveConflict extends Error {
+  constructor(readonly data: AppData) {
+    super("The log changed since it was loaded");
+  }
 }
 
-export function subscribeToOtherTabs(onChange: () => void): () => void {
-  const listener = (e: StorageEvent) => {
-    if (e.key === DATA_KEY) onChange();
-  };
-  window.addEventListener("storage", listener);
-  return () => window.removeEventListener("storage", listener);
+let revision = "";
+let dataPath = "";
+
+export function getDataPath(): string {
+  return dataPath;
+}
+
+// Saves run one at a time, so each is based on the revision the last one produced.
+let queue: Promise<unknown> = Promise.resolve();
+
+function enqueue<T>(task: () => Promise<T>): Promise<T> {
+  const run = queue.then(task);
+  queue = run.catch(() => {});
+  return run;
+}
+
+async function readStored(): Promise<Stored> {
+  const response = await fetch("/api/data");
+  if (!response.ok) throw new Error(`Couldn't read the log (${response.status})`);
+  return (await response.json()) as Stored;
+}
+
+/** Adopts what's on disk. A damaged file throws here, so it's reported and never overwritten. */
+function adopt(stored: Stored): AppData {
+  const data = stored.text === null ? emptyData() : parseData(stored.text);
+  revision = stored.revision;
+  dataPath = stored.path;
+  return data;
+}
+
+async function put(data: AppData): Promise<void> {
+  const response = await fetch(`/api/data?revision=${encodeURIComponent(revision)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data, null, 2),
+  });
+  if (response.status === 409) {
+    const { current } = (await response.json()) as { current: Stored };
+    throw new SaveConflict(adopt(current));
+  }
+  if (!response.ok) throw new Error(`Couldn't save the log (${response.status})`);
+  revision = ((await response.json()) as { revision: string }).revision;
+}
+
+/** Applies a change to the latest log on disk, starting again if something else saves first. */
+async function change(apply: (latest: AppData, exists: boolean) => AppData): Promise<AppData> {
+  for (let attempt = 0; ; attempt++) {
+    const stored = await readStored();
+    const next = apply(adopt(stored), stored.text !== null);
+    try {
+      await put(next);
+      return next;
+    } catch (error) {
+      if (!(error instanceof SaveConflict) || attempt >= 4) throw error;
+    }
+  }
+}
+
+/**
+ * Logs used to live in localStorage, separately for each address the app was opened on.
+ * Each one is merged in once. The old copy stays in the browser, in case it's ever needed.
+ */
+async function migrateFromBrowser(): Promise<void> {
+  const raw = localStorage.getItem(DATA_KEY);
+  if (raw === null || localStorage.getItem(MIGRATED_KEY) !== null) return;
+  let old: AppData;
+  try {
+    old = parseData(raw);
+  } catch {
+    return;
+  }
+  await change((latest, exists) => ({
+    sessions: addNewSessions(latest.sessions, old.sessions),
+    settings: exists ? latest.settings : old.settings,
+    lastBackup: latest.lastBackup ?? old.lastBackup,
+  }));
+  localStorage.setItem(MIGRATED_KEY, new Date().toISOString());
+}
+
+export function loadData(): Promise<AppData> {
+  return enqueue(async () => {
+    await migrateFromBrowser();
+    return adopt(await readStored());
+  });
+}
+
+export function saveData(data: AppData): Promise<void> {
+  return enqueue(() => put(data));
+}
+
+export function updateData(apply: (latest: AppData) => AppData): Promise<AppData> {
+  return enqueue(() => change(apply));
+}
+
+/** The log if it has changed on disk, or null if it hasn't or the server can't be reached. */
+export function refreshData(): Promise<AppData | null> {
+  return enqueue(async () => {
+    let stored: Stored;
+    try {
+      stored = await readStored();
+    } catch {
+      return null;
+    }
+    return stored.revision === revision ? null : adopt(stored);
+  });
+}
+
+/**
+ * Adds sessions from the browser extension, which can deliver one twice. A repeat is
+ * skipped rather than overwritten, so it can't undo a rating given in the meantime.
+ */
+export function addNewSessions(current: Session[], incoming: unknown[]): Session[] {
+  const ids = new Set(current.map((s) => s.id));
+  const added = incoming
+    .map(parseSession)
+    .filter((s): s is Session => s !== null && !ids.has(s.id));
+  return [...current, ...added];
 }
 
 /** Imported sessions overwrite ones with the same id; everything else is kept. */

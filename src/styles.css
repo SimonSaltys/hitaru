@@ -649,10 +649,6 @@ td {
   font-size: 13.5px;
 }
 
-.backup-note.overdue {
-  padding-left: 10px;
-  border-left: 3px solid var(--alert);
-}
 
 /* Floating */
 .tooltip {

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Hitaru</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        width: 360px;
+        margin: 0;
+        padding: 14px;
+        background: #0a002a;
+        color: #fff;
+        font: 13.5px/1.4 system-ui, "Segoe UI", "Yu Gothic UI", sans-serif;
+      }
+      h1 { margin: 0; font-size: 15px; }
+      header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+      ul { margin: 0; padding: 0; list-style: none; max-height: 380px; overflow-y: auto; }
+      li { padding: 8px 0; border-top: 1px solid rgba(255, 255, 255, 0.09); }
+      .title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+      .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; }
+      .muted { color: #cdc7ee; font-size: 12.5px; min-width: 0; overflow-wrap: anywhere; }
+      .actions { display: flex; flex: none; gap: 4px; }
+      button {
+        padding: 3px 10px;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 999px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:hover { background: rgba(255, 255, 255, 0.08); }
+      button.primary { background: #6c3fe0; border-color: #6c3fe0; }
+      button.quiet { border-color: transparent; color: #cdc7ee; }
+      p { margin: 8px 0 0; }
+      a { color: #d3c6ff; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Hitaru</h1>
+      <button type="button" id="log-all" class="primary" hidden></button>
+    </header>
+    <ul id="videos" lang="ja"></ul>
+    <p id="empty" class="muted" hidden>Nothing watched yet. Play a YouTube video and it will show up here.</p>
+    <p id="waiting" class="muted" hidden></p>
+    <script src="popup.js"></script>
+  </body>
+</html>

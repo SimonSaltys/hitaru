@@ -6,7 +6,10 @@ import { AlignmentQueue } from "./alignment.ts";
 import { greenWords } from "./anki.ts";
 import { Capture, OBSERVED_PROPERTIES, type CaptureEvent } from "./capture.ts";
 import { contentType, listEpisodes, resolveEpisode, subtitlesFor } from "./library.ts";
+import { DataStore, defaultDataDir, isLogData } from "./store.ts";
 import { loadTokenizer, tokenizeCue, type CueToken } from "./tokens.ts";
+
+const MAX_DATA_BYTES = 20 * 1024 * 1024;
 
 export const MPV_PIPE = process.platform === "win32" ? "\\\\.\\pipe\\hitaru-mpv" : "/tmp/hitaru-mpv";
 // Short, so the opening subtitles aren't missed while mpv starts up.
@@ -68,6 +71,20 @@ function sendJson(res: ServerResponse, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+/** Resolves to null if the body is over the limit. */
+function readBody(req: IncomingMessage, limit: number): Promise<string | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size <= limit) chunks.push(chunk);
+    });
+    req.on("end", () => resolve(size > limit ? null : Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
 function streamVideo(req: IncomingMessage, res: ServerResponse, file: string): void {
   const { size } = fs.statSync(file);
   res.setHeader("Content-Type", contentType(file));
@@ -126,6 +143,41 @@ function attach(middlewares: Connect.Server): void {
 
   const alignments = new AlignmentQueue();
   const tokenCache = new Map<string, CueToken[][]>();
+  const store = new DataStore(defaultDataDir());
+
+  middlewares.use("/api/data", (req, res, next) => {
+    if (req.method === "GET") {
+      try {
+        sendJson(res, store.read());
+      } catch {
+        res.statusCode = 500;
+        res.end();
+      }
+      return;
+    }
+    if (req.method !== "PUT") return next();
+    if (!isSameOrigin(req)) {
+      res.statusCode = 403;
+      res.end();
+      return;
+    }
+    const revision = new URL(req.url ?? "/", "http://localhost").searchParams.get("revision") ?? "";
+    readBody(req, MAX_DATA_BYTES)
+      .then((text) => {
+        if (text === null || !isLogData(text)) {
+          res.statusCode = text === null ? 413 : 400;
+          res.end();
+          return;
+        }
+        const result = store.write(revision, text);
+        if (!result.saved) res.statusCode = 409;
+        sendJson(res, result);
+      })
+      .catch(() => {
+        res.statusCode = 500;
+        res.end();
+      });
+  });
 
   middlewares.use("/api/anki/words", (req, res, next) => {
     if (req.method !== "GET") return next();

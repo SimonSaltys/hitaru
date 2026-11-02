@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Hitaru for YouTube",
+  "version": "0.1.0",
+  "description": "Times the YouTube videos you watch and logs the ones you choose to Hitaru.",
+  "permissions": ["storage"],
+  "action": { "default_popup": "popup.html", "default_title": "Hitaru" },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*", "https://m.youtube.com/*"],
+      "js": ["youtube.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "http://localhost:5173/*",
+        "http://127.0.0.1:5173/*",
+        "http://localhost:4173/*",
+        "http://127.0.0.1:4173/*"
+      ],
+      "js": ["hitaru.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

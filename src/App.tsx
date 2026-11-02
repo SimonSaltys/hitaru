@@ -12,17 +12,20 @@ import { cleanTitle } from "./lib/subtitles";
 import { fromKey, longDate, shortDate, toKey } from "./lib/dates";
 import { crossedMilestone, formatMinutes, rankBy, totalMinutes, weeklyStats } from "./lib/stats";
 import {
+  addNewSessions,
+  getDataPath,
   loadData,
   mergeSessions,
   newId,
   parseData,
+  refreshData,
+  SaveConflict,
   saveData,
-  subscribeToOtherTabs,
+  updateData,
 } from "./lib/storage";
 import type { AppData, Session, Settings } from "./lib/types";
 
 const CHART_WEEKS = 12;
-const BACKUP_REMINDER_DAYS = 14;
 
 interface Toast {
   message: string;
@@ -55,32 +58,52 @@ function useToday(): Date {
 }
 
 export function App() {
-  const [{ data, loadError }, setLoaded] = useState<{ data: AppData | null; loadError: boolean }>(() => {
-    try {
-      return { data: loadData(), loadError: false };
-    } catch {
-      return { data: null, loadError: true };
-    }
+  const [{ data, loadError }, setLoaded] = useState<{ data: AppData | null; loadError: boolean }>({
+    data: null,
+    loadError: false,
   });
 
-  useEffect(() => subscribeToOtherTabs(() => {
-    try {
-      setLoaded({ data: loadData(), loadError: false });
-    } catch {
-      setLoaded({ data: null, loadError: true });
-    }
-  }), []);
+  useEffect(() => {
+    loadData()
+      .then((loaded) => setLoaded({ data: loaded, loadError: false }))
+      .catch(() => setLoaded({ data: null, loadError: true }));
+  }, []);
 
-  if (loadError || !data) {
+  // Another tab or address may have saved while this one was in the background.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      refreshData()
+        .then((latest) => latest && setLoaded({ data: latest, loadError: false }))
+        .catch(() => setLoaded({ data: null, loadError: true }));
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
+
+  if (loadError) {
     return (
       <main className="page">
         <div className="panel">
           <h1>Your saved data couldn't be read</h1>
           <p>
-            Nothing has been changed or overwritten. The raw data is still in this browser's
-            localStorage under <code>hitaru.data.v1</code>.
+            Nothing has been changed or overwritten. Your log is in{" "}
+            <code>{getDataPath() || "Documents\\Hitaru\\hitaru-data.json"}</code>, with daily
+            copies in the <code>backups</code> folder beside it.
           </p>
         </div>
+      </main>
+    );
+  }
+
+  if (!data) {
+    return (
+      <main className="page">
+        <p className="secondary">Loading your log…</p>
       </main>
     );
   }
@@ -164,13 +187,47 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
 
   function commit(next: AppData) {
     setData(next);
-    try {
-      saveData(next);
-      setSaveFailed(false);
-    } catch {
-      setSaveFailed(true);
-    }
+    saveData(next)
+      .then(() => setSaveFailed(false))
+      .catch((error: unknown) => {
+        if (error instanceof SaveConflict) {
+          setData(error.data);
+          setEditing(null);
+          setToast({ message: "The log was changed in another tab, so your last change wasn't saved. Please redo it." });
+        } else {
+          setSaveFailed(true);
+        }
+      });
   }
+
+  // Sessions logged from the browser extension. It keeps them until told they're saved.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      if (e.source !== window || e.origin !== window.location.origin) return;
+      const message = e.data as { type?: string; sessions?: { id?: unknown }[] } | null;
+      if (message?.type !== "hitaru:log" || !Array.isArray(message.sessions)) return;
+      const incoming = message.sessions;
+      let added = 0;
+      // Merged into the latest log on disk, since another tab may have just saved the same delivery.
+      updateData((latest) => {
+        const sessions = addNewSessions(latest.sessions, incoming);
+        added = sessions.length - latest.sessions.length;
+        return { ...latest, sessions };
+      })
+        .then((saved) => {
+          setData(saved);
+          if (added > 0) {
+            setToast({ message: `Added ${added} YouTube ${added === 1 ? "session" : "sessions"} from the extension` });
+          }
+          window.postMessage({ type: "hitaru:logged", ids: incoming.map((s) => s.id) }, window.location.origin);
+        })
+        // Unacknowledged, so the extension keeps them and tries again next time.
+        .catch(() => setSaveFailed(true));
+    };
+    window.addEventListener("message", onMessage);
+    window.postMessage({ type: "hitaru:ready" }, window.location.origin);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
 
   function saveSession(fields: Omit<Session, "id">) {
     if (editing) {
@@ -234,11 +291,6 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
   const byCategory = useMemo(() => rankBy(sessions, (s) => s.category), [sessions]);
   const byTitle = useMemo(() => rankBy(sessions, (s) => s.title).slice(0, 7), [sessions]);
 
-  const backupOverdue =
-    sessions.length > 0 &&
-    (!data.lastBackup ||
-      (today.getTime() - fromKey(data.lastBackup).getTime()) / 86_400_000 >= BACKUP_REMINDER_DAYS);
-
   return (
     <main className="page">
       <header className="masthead">
@@ -252,7 +304,7 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
 
       {saveFailed && (
         <p className="banner" role="alert">
-          Your last change couldn't be saved in this browser. Export a backup before closing this page.
+          Your last change couldn't be saved to disk. Export a backup before closing this page.
         </p>
       )}
 
@@ -362,11 +414,9 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
             />
           </label>
         </div>
-        <p className={backupOverdue ? "backup-note overdue" : "backup-note secondary"}>
-          Your log is stored only in this browser, so clearing site data deletes it.{" "}
-          {data.lastBackup
-            ? `Last backup: ${longDate(fromKey(data.lastBackup))}.`
-            : "You haven't made a backup yet."}
+        <p className="backup-note secondary">
+          Your log is saved in <code>{getDataPath()}</code>, with a daily copy kept for 30 days.{" "}
+          {data.lastBackup && `Last export: ${longDate(fromKey(data.lastBackup))}.`}
         </p>
         <div className="form-actions">
           <button type="button" onClick={exportBackup}>Export backup</button>
