@@ -6,7 +6,7 @@ import type { CueToken } from "../../bridge/tokens";
 import { useAnkiWords } from "../hooks/useAnkiWords";
 import { isKnown, markKnown, percent, understanding, type KnownWords } from "../lib/known";
 import { formatMinutes } from "../lib/stats";
-import { subtitleStats } from "../lib/subtitles";
+import { latestLine, stepLine, subtitleStats } from "../lib/subtitles";
 import { activeWord, flowLines, furiganaPieces, textPieces } from "../lib/words";
 import {
   loadLastEpisode,
@@ -39,12 +39,6 @@ function clock(seconds: number): string {
 
 function findCue(cues: Cue[], time: number): number {
   return cues.findIndex((cue) => time >= cue.start && time < cue.end);
-}
-
-/** The line to hear again: the latest one to have started, so it also works just after a line ends. */
-function lineToReplay(cues: Cue[], time: number): Cue | undefined {
-  const next = cues.findIndex((cue) => cue.start > time);
-  return next === -1 ? cues[cues.length - 1] : cues[next - 1];
 }
 
 function Furigana({ text }: { text: string }) {
@@ -286,21 +280,33 @@ function Player({ episode, onEnded, onSendToLog }: {
     setLookupPause(true);
   }
 
-  function replayLine() {
+  /** Plays from the start of a line, even if paused, since the point is to hear it. */
+  function playLine(index: number | null) {
     const video = videoRef.current;
-    const cue = video && lineToReplay(cuesRef.current, video.currentTime - offsetRef.current);
+    const cue = index === null ? undefined : cuesRef.current[index];
     if (!video || !cue) return;
     seekAllowed.current = true;
     video.currentTime = cue.start + offsetRef.current;
     void video.play();
   }
 
+  function videoTime(): number {
+    return (videoRef.current?.currentTime ?? 0) - offsetRef.current;
+  }
+
+  function replayLine() {
+    playLine(latestLine(cuesRef.current, videoTime()));
+  }
+
   // Works in fullscreen, where the buttons under the video are out of reach.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() !== "r" || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       if ((e.target as Element).closest("input, textarea, select")) return;
-      replayLine();
+      const key = e.key.toLowerCase();
+      if (key === "r") replayLine();
+      else if (key === "q") playLine(stepLine(cuesRef.current, videoTime(), -1));
+      else if (key === "e") playLine(stepLine(cuesRef.current, videoTime(), 1));
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -488,7 +494,7 @@ function Player({ episode, onEnded, onSendToLog }: {
             <button
               type="button"
               className="replay-line"
-              title="Replay this line (R)"
+              title="Replay this line (R). Previous line: Q. Next line: E."
               onClick={(e) => {
                 replayLine();
                 // Otherwise Space would replay again instead of pausing.

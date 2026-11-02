@@ -3,6 +3,23 @@ const SINGLE_KANA = /^[\p{Script=Hiragana}]$/u;
 
 const segmenter = new Intl.Segmenter("ja", { granularity: "word" });
 
+// A seek can land a hair before the time it asked for, which mustn't count as the previous line.
+const SEEK_TOLERANCE_SECONDS = 0.05;
+
+/** Index of the latest line to have started, so it also works just after a line ends. -1 before the first. */
+export function latestLine(cues: { start: number }[], time: number): number {
+  const next = cues.findIndex((cue) => cue.start > time + SEEK_TOLERANCE_SECONDS);
+  return next === -1 ? cues.length - 1 : next - 1;
+}
+
+/** Index of the line one step back (-1) or forward (1), or null if there isn't one to go to. */
+export function stepLine(cues: { start: number }[], time: number, step: -1 | 1): number | null {
+  const latest = latestLine(cues, time);
+  if (step === 1) return latest + 1 < cues.length ? latest + 1 : null;
+  // On the first line, going back restarts it.
+  return latest < 0 ? null : Math.max(latest - 1, 0);
+}
+
 /**
  * Splits text into Japanese words. Intl.Segmenter doesn't reduce words to their
  * dictionary form, so 食べる and 食べた count separately; treat counts as estimates.

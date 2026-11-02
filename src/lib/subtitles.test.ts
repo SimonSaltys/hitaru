@@ -1,5 +1,31 @@
 import { describe, expect, it } from "vitest";
-import { cleanTitle, japaneseWords, subtitleStats } from "./subtitles";
+import { cleanTitle, japaneseWords, latestLine, stepLine, subtitleStats } from "./subtitles";
+
+describe("line stepping", () => {
+  const cues = [{ start: 10 }, { start: 20 }, { start: 30 }];
+
+  it("steps from the current line", () => {
+    expect(stepLine(cues, 21, 1)).toBe(2);
+    expect(stepLine(cues, 21, -1)).toBe(0);
+  });
+
+  it("treats a gap as still being on the line that just ended", () => {
+    expect(latestLine(cues, 25)).toBe(1);
+    expect(stepLine(cues, 25, 1)).toBe(2);
+  });
+
+  it("moves on even if the last seek landed just short of its line", () => {
+    expect(stepLine(cues, 19.99, 1)).toBe(2);
+    expect(stepLine(cues, 19.99, -1)).toBe(0);
+  });
+
+  it("stops at the ends", () => {
+    expect(stepLine(cues, 5, 1)).toBe(0);
+    expect(stepLine(cues, 5, -1)).toBeNull();
+    expect(stepLine(cues, 11, -1)).toBe(0);
+    expect(stepLine(cues, 35, 1)).toBeNull();
+  });
+});
 
 describe("japaneseWords", () => {
   it("segments Japanese and skips punctuation and Latin text", () => {
