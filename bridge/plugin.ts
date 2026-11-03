@@ -1,15 +1,18 @@
 import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Connect, Plugin } from "vite";
 import { AlignmentQueue } from "./alignment.ts";
-import { greenWords } from "./anki.ts";
+import { allWords, greenWords } from "./anki.ts";
 import { Capture, OBSERVED_PROPERTIES, type CaptureEvent } from "./capture.ts";
 import { contentType, listEpisodes, resolveEpisode, subtitlesFor } from "./library.ts";
+import { CardError, createCard } from "./mining.ts";
 import { DataStore, defaultDataDir, isLogData } from "./store.ts";
-import { loadTokenizer, tokenizeCue, type CueToken } from "./tokens.ts";
+import { loadTokenizer, toHiragana, tokenizeCue, type CueToken } from "./tokens.ts";
 
 const MAX_DATA_BYTES = 20 * 1024 * 1024;
+const MAX_CARD_REQUEST_BYTES = 10 * 1024;
 
 export const MPV_PIPE = process.platform === "win32" ? "\\\\.\\pipe\\hitaru-mpv" : "/tmp/hitaru-mpv";
 // Short, so the opening subtitles aren't missed while mpv starts up.
@@ -179,24 +182,72 @@ function attach(middlewares: Connect.Server): void {
       });
   });
 
-  middlewares.use("/api/anki/words", (req, res, next) => {
-    if (req.method !== "GET") return next();
-    greenWords()
+  const tokensFor = async (file: string): Promise<CueToken[][]> => {
+    const cached = tokenCache.get(file);
+    if (cached) return cached;
+    const tokenizer = await loadTokenizer();
+    const tokens = subtitlesFor(file).cues.map((cue) => tokenizeCue(tokenizer, cue.text));
+    tokenCache.set(file, tokens);
+    return tokens;
+  };
+
+  const sendAnkiWords = (load: () => Promise<unknown>, res: ServerResponse) => {
+    load()
       .then((words) => sendJson(res, words))
       .catch(() => {
         // Anki being closed is routine; the page falls back to the last list it saw.
         res.statusCode = 503;
         res.end();
       });
+  };
+
+  middlewares.use("/api/anki/words", (req, res, next) => {
+    if (req.method !== "GET") return next();
+    sendAnkiWords(greenWords, res);
   });
+
+  middlewares.use("/api/anki/all-words", (req, res, next) => {
+    if (req.method !== "GET") return next();
+    sendAnkiWords(allWords, res);
+  });
+
+  const makeCard = async (file: string, req: IncomingMessage): Promise<unknown> => {
+    const body = await readBody(req, MAX_CARD_REQUEST_BYTES);
+    const { cue: index, lemma, offset } = JSON.parse(body ?? "null") as { cue?: unknown; lemma?: unknown; offset?: unknown };
+    const cue = typeof index === "number" ? subtitlesFor(file).cues[index] : undefined;
+    const tokens = typeof index === "number" ? (await tokensFor(file))[index] : undefined;
+    if (!cue || !tokens || typeof lemma !== "string" || typeof offset !== "number" || !Number.isFinite(offset)) {
+      throw new CardError("That card request wasn't valid");
+    }
+    if (!tokens.some((token) => token.lemma === lemma)) throw new CardError(`${lemma} isn't in that line`);
+    // In dictionary form the line's own reading applies. Otherwise the analyzer has to read the lemma.
+    const tokenizer = await loadTokenizer();
+    const reading =
+      tokens.find((token) => token.lemma === lemma && token.surface === lemma)?.reading ??
+      toHiragana(tokenizer.tokenize(lemma).map((t) => t.reading ?? t.surface_form).join(""));
+    const seconds = Math.floor(cue.start);
+    const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+    const label = `${path.parse(file).name} ${time}`;
+    return createCard({ video: file, label, cue, tokens, lemma, reading, offset });
+  };
 
   middlewares.use("/api/library", (req, res, next) => {
     if (req.method === "POST") {
-      const file = resolveEpisode(req.url?.match(/^\/([\w-]+)\/align$/)?.[1] ?? "");
-      if (!file) return next();
+      const match = req.url?.match(/^\/([\w-]+)\/(align|card)$/);
+      const file = resolveEpisode(match?.[1] ?? "");
+      if (!match || !file) return next();
       if (!isSameOrigin(req)) {
         res.statusCode = 403;
         res.end();
+        return;
+      }
+      if (match[2] === "card") {
+        makeCard(file, req)
+          .then((card) => sendJson(res, card))
+          .catch((error: unknown) => {
+            res.statusCode = error instanceof CardError ? 422 : 500;
+            sendJson(res, { error: error instanceof Error ? error.message : "Couldn't make the card" });
+          });
         return;
       }
       alignments.enqueue(file, subtitlesFor(file).cues);
@@ -217,14 +268,8 @@ function attach(middlewares: Connect.Server): void {
     if (match[2] === "video") return streamVideo(req, res, file);
     if (match[2] === "words") return sendJson(res, alignments.status(file, subtitlesFor(file).cues));
     if (match[2] === "tokens") {
-      const cached = tokenCache.get(file);
-      if (cached) return sendJson(res, cached);
-      loadTokenizer()
-        .then((tokenizer) => {
-          const tokens = subtitlesFor(file).cues.map((cue) => tokenizeCue(tokenizer, cue.text));
-          tokenCache.set(file, tokens);
-          sendJson(res, tokens);
-        })
+      tokensFor(file)
+        .then((tokens) => sendJson(res, tokens))
         .catch(() => sendJson(res, []));
       return;
     }

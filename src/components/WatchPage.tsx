@@ -5,6 +5,7 @@ import type { Cue } from "../../bridge/subtitles";
 import type { CueToken } from "../../bridge/tokens";
 import { useAnkiWords } from "../hooks/useAnkiWords";
 import { isKnown, markKnown, percent, understanding, type KnownWords } from "../lib/known";
+import { wordsToLearn } from "../lib/mining";
 import { formatMinutes } from "../lib/stats";
 import { latestLine, stepLine, subtitleStats } from "../lib/subtitles";
 import { activeWord, flowLines, furiganaPieces, textPieces } from "../lib/words";
@@ -30,6 +31,7 @@ const FOLLOW_PAUSE_MS = 5000;
 // Roughly how long the browser keeps its controls up after the mouse stops.
 const CONTROLS_VISIBLE_MS = 3000;
 const ALIGNMENT_POLL_MS = 1000;
+const WORDS_SHOWN = 15;
 
 function clock(seconds: number): string {
   const total = Math.floor(seconds);
@@ -92,6 +94,94 @@ function Overlay({ text, words, tokens, known, offset, video, onMouseMove }: {
         );
       })}
     </p>
+  );
+}
+
+/** Unknown words from this episode, each one click from an Anki card. */
+function WordsToLearn({ episodeId, cues, tokens, known, inAnki, offset, onPlay }: {
+  episodeId: string;
+  cues: Cue[];
+  tokens: CueToken[][];
+  known: KnownWords;
+  inAnki: KnownWords | null;
+  offset: number;
+  onPlay: (cue: number) => void;
+}) {
+  const [shown, setShown] = useState(WORDS_SHOWN);
+  const [cards, setCards] = useState<Record<string, "adding" | "added" | { error: string }>>({});
+
+  const { words, withCards } = useMemo(
+    () => (inAnki ? wordsToLearn(tokens, known, inAnki) : { words: [], withCards: 0 }),
+    [tokens, known, inAnki],
+  );
+
+  async function addCard(lemma: string, cue: number) {
+    setCards((c) => ({ ...c, [lemma]: "adding" }));
+    try {
+      const response = await fetch(`/api/library/${episodeId}/card`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cue, lemma, offset }),
+      });
+      const body = (await response.json()) as { error?: string };
+      setCards((c) => ({ ...c, [lemma]: response.ok ? "added" : { error: body.error ?? "Couldn't make the card" } }));
+    } catch {
+      setCards((c) => ({ ...c, [lemma]: { error: "Couldn't reach the server" } }));
+    }
+  }
+
+  if (tokens.length === 0) return null;
+  const added = Object.values(cards).filter((state) => state === "added").length;
+
+  return (
+    <section className="panel">
+      <div className="live-header">
+        <h2>Words to learn next</h2>
+        {added > 0 && <span className="status">{added} added to Hitaru Mining</span>}
+      </div>
+      {!inAnki ? (
+        <p className="secondary score-note">Open Anki to see which words to learn and add cards.</p>
+      ) : (
+        <>
+          <p className="secondary score-note">
+            Most used first, with the easiest line for each. {withCards.toLocaleString()} more already
+            have cards you haven't finished learning. The first card also downloads the dictionary.
+          </p>
+          <ul className="mine-list">
+            {words.slice(0, shown).map(({ lemma, count, cue }) => {
+              const state = cards[lemma];
+              return (
+                <li key={lemma}>
+                  <span className="mine-word" lang="ja">{lemma} <span className="secondary">{count}×</span></span>
+                  <button
+                    type="button"
+                    className="ghost mine-line"
+                    lang="ja"
+                    title="Play this line"
+                    onClick={() => onPlay(cue)}
+                  >
+                    <CueText text={cues[cue]?.text ?? ""} tokens={tokens[cue]} known={known} />
+                  </button>
+                  {state === "added" ? (
+                    <span className="secondary">Added</span>
+                  ) : (
+                    <button type="button" disabled={state === "adding"} onClick={() => void addCard(lemma, cue)}>
+                      {state === "adding" ? "Adding…" : "Add card"}
+                    </button>
+                  )}
+                  {typeof state === "object" && <p className="mine-error" role="alert">{state.error}</p>}
+                </li>
+              );
+            })}
+          </ul>
+          {words.length > shown && (
+            <button type="button" onClick={() => setShown((n) => n + WORDS_SHOWN)}>
+              Show more ({words.length - shown} left)
+            </button>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -567,6 +657,16 @@ function Player({ episode, onEnded, onSendToLog }: {
             </p>
           </section>
         )}
+
+        <WordsToLearn
+          episodeId={episode.id}
+          cues={cues}
+          tokens={tokens}
+          known={anki.known}
+          inAnki={anki.inAnki}
+          offset={offset}
+          onPlay={playLine}
+        />
 
         <section className="panel">
           <div className="live-header">

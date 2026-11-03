@@ -54,6 +54,14 @@ describe("tokenizeCue", () => {
     expect(text.slice(first.from, first.to)).toContain("(いぬやま)");
   });
 
+  it("prefers a reading written in the subtitle", () => {
+    expect(tokenizeCue(tokenizer, "薪(まき)は")[0]).toMatchObject({ surface: "薪", reading: "まき" });
+  });
+
+  it("doesn't take a reading that covers only part of a word", () => {
+    expect(tokenizeCue(tokenizer, "焚(た)き火")[0]?.reading).not.toBe("た");
+  });
+
   it("gives readings in hiragana", () => {
     expect(tokenizeCue(tokenizer, "本")[0]?.reading).toBe("ほん");
   });

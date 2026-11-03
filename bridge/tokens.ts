@@ -29,7 +29,7 @@ const NOT_VOCABULARY = new Set(["非自立", "接尾", "固有名詞", "数"]);
 // Usually a stutter or a piece of a sound effect that the analyzer split off.
 const LONE_KANA = /^[\p{Script=Hiragana}\p{Script=Katakana}ー]$/u;
 
-function toHiragana(text: string): string {
+export function toHiragana(text: string): string {
   return text.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
 }
 
@@ -74,12 +74,17 @@ export function tokenizeCue(tokenizer: Tokenizer, text: string): CueToken[] {
     if (!JAPANESE.test(token.surface_form)) continue;
     const start = token.word_position - 1;
     const end = start + token.surface_form.length;
+    const from = readable.offsets[start]!;
+    const to = endWithReading(text, readable.offsets[end - 1]! + 1);
+    // A reading written across the whole word beats the analyzer's guess: 薪(まき), not たきぎ.
+    const range = text.slice(from, to);
+    const written = range.startsWith(token.surface_form) ? range.slice(token.surface_form.length + 1, -1) : "";
     tokens.push({
-      from: readable.offsets[start]!,
-      to: endWithReading(text, readable.offsets[end - 1]! + 1),
+      from,
+      to,
       surface: token.surface_form,
       lemma: token.basic_form === "*" ? token.surface_form : token.basic_form,
-      reading: toHiragana(token.reading ?? token.surface_form),
+      reading: toHiragana(written || (token.reading ?? token.surface_form)),
       counts:
         token.word_type === "KNOWN" &&
         // し is a real verb stem of する, so only a kana that's its own dictionary form is suspect.

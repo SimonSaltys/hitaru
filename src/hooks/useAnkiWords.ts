@@ -9,6 +9,8 @@ export interface AnkiWords {
   count: number;
   /** "saved" means Anki is closed and these are from the last time it was open. */
   source: "loading" | "live" | "saved" | "none";
+  /** Every word with a card, green or not. Null while Anki can't be reached. */
+  inAnki: KnownWords | null;
 }
 
 function loadSaved(): AnkiWord[] | null {
@@ -24,9 +26,14 @@ function loadSaved(): AnkiWord[] | null {
 export function useAnkiWords(): AnkiWords {
   const [words, setWords] = useState<AnkiWord[]>(() => loadSaved() ?? []);
   const [source, setSource] = useState<AnkiWords["source"]>("loading");
+  const [allWords, setAllWords] = useState<AnkiWord[] | null>(null);
 
   useEffect(() => {
     const refresh = () => {
+      fetch("/api/anki/all-words")
+        .then((r) => (r.ok ? (r.json() as Promise<AnkiWord[]>) : null))
+        .catch(() => null)
+        .then(setAllWords);
       fetch("/api/anki/words")
         .then((r) => {
           if (!r.ok) throw new Error(`Status ${r.status}`);
@@ -52,5 +59,6 @@ export function useAnkiWords(): AnkiWords {
   }, []);
 
   const known = useMemo(() => buildKnownWords(words), [words]);
-  return { known, count: words.length, source };
+  const inAnki = useMemo(() => (allWords ? buildKnownWords(allWords) : null), [allWords]);
+  return { known, count: words.length, source, inAnki };
 }

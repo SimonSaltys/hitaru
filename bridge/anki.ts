@@ -39,8 +39,42 @@ export function wordsFromNotes(notes: AnkiNote[]): AnkiWord[] {
     .filter(({ word }) => word);
 }
 
-/** Throws if Anki is closed or AnkiConnect isn't installed. */
-export async function greenWords(): Promise<AnkiWord[]> {
-  const ids = await ankiConnect<number[]>("findNotes", { query: GREEN_CARDS });
+async function wordsMatching(query: string): Promise<AnkiWord[]> {
+  const ids = await ankiConnect<number[]>("findNotes", { query });
   return wordsFromNotes(await ankiConnect<AnkiNote[]>("notesInfo", { notes: ids }));
+}
+
+/** Throws if Anki is closed or AnkiConnect isn't installed. */
+export function greenWords(): Promise<AnkiWord[]> {
+  return wordsMatching(GREEN_CARDS);
+}
+
+/** Every word with a card, however far along it is. */
+export function allWords(): Promise<AnkiWord[]> {
+  return wordsMatching("deck:*");
+}
+
+export interface NewNote {
+  deckName: string;
+  modelName: string;
+  fields: Record<string, string>;
+  tags: string[];
+}
+
+export function createDeck(deck: string): Promise<number> {
+  return ankiConnect("createDeck", { deck });
+}
+
+/** False for a duplicate, which Anki judges by a note type's first field. */
+export async function canAddNote(note: NewNote): Promise<boolean> {
+  const [can] = await ankiConnect<boolean[]>("canAddNotes", { notes: [note] });
+  return can === true;
+}
+
+export function addNote(note: NewNote): Promise<number> {
+  return ankiConnect("addNote", { note });
+}
+
+export function storeMedia(filename: string, contents: Buffer): Promise<string> {
+  return ankiConnect("storeMediaFile", { filename, data: contents.toString("base64") });
 }
