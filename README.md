@@ -1,4 +1,4 @@
-# Hitaru
+# Hitaru (Yes I use claude, if you dont like AI use dont use this project)
 
 A Japanese immersion log and subtitle video player that runs on your own computer. Log your
 watching time, play episodes with clickable subtitles, see which words you already know from
