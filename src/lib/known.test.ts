@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CueToken } from "../../bridge/tokens";
-import { buildKnownWords, isKnown, markKnown, percent, understanding } from "./known";
+import { heardTokens, buildKnownWords, isKnown, markKnown, percent, understanding } from "./known";
 
 function token(surface: string, lemma: string, reading: string, counts = true): CueToken {
   return { from: 0, to: surface.length, surface, lemma, reading, counts };
@@ -71,5 +71,12 @@ describe("markKnown", () => {
   it("marks a known word that spans several pieces", () => {
     const marked = markKnown([{ text: "勉", word: 0 }, { text: "強", word: 1 }], [{ from: 0, to: 2 }]);
     expect(marked.every((p) => p.known)).toBe(true);
+  });
+});
+
+describe("heardTokens", () => {
+  it("takes only this episode's lines", () => {
+    const cues = [[], [{ surface: "犬" }], [{ surface: "猫" }]] as unknown as Parameters<typeof heardTokens>[2];
+    expect(heardTokens(["ep1:1", "ep2:2", "ep1:9"], "ep1", cues)).toEqual([cues[1]]);
   });
 });

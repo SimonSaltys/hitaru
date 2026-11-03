@@ -4,18 +4,21 @@ import type { Episode, SubtitleTrack } from "../../bridge/library";
 import type { Cue } from "../../bridge/subtitles";
 import type { CueToken } from "../../bridge/tokens";
 import { useAnkiWords } from "../hooks/useAnkiWords";
-import { isKnown, markKnown, percent, understanding, type KnownWords } from "../lib/known";
+import { heardTokens, isKnown, markKnown, percent, understanding, type KnownWords } from "../lib/known";
 import { wordsToLearn } from "../lib/mining";
 import { formatMinutes } from "../lib/stats";
-import { latestLine, stepLine, subtitleStats } from "../lib/subtitles";
+import { latestLine, lineToStopAt, stepLine, subtitleStats } from "../lib/subtitles";
+import type { SessionStats } from "../lib/types";
 import { activeWord, flowLines, furiganaPieces, textPieces } from "../lib/words";
 import {
   loadLastEpisode,
   loadOffset,
+  loadPlayerPrefs,
   loadPosition,
   loadProgress,
   saveLastEpisode,
   saveOffset,
+  savePlayerPrefs,
   savePosition,
   saveProgress,
   type ShowProgress,
@@ -186,7 +189,7 @@ function WordsToLearn({ episodeId, cues, tokens, known, inAnki, offset, onPlay }
 }
 
 export function WatchPage({ onSendToLog }: {
-  onSendToLog: (show: string, minutes: number) => void;
+  onSendToLog: (show: string, minutes: number, stats: SessionStats) => void;
 }) {
   const [episodes, setEpisodes] = useState<Episode[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -263,7 +266,7 @@ export function WatchPage({ onSendToLog }: {
 function Player({ episode, onEnded, onSendToLog }: {
   episode: Episode;
   onEnded: () => void;
-  onSendToLog: (show: string, minutes: number) => void;
+  onSendToLog: (show: string, minutes: number, stats: SessionStats) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -282,6 +285,8 @@ function Player({ episode, onEnded, onSendToLog }: {
   const [mouseActive, setMouseActive] = useState(false);
   const [lookupPause, setLookupPause] = useState(false);
   const [tokens, setTokens] = useState<CueToken[][]>([]);
+  const [prefs, setPrefs] = useState(loadPlayerPrefs);
+  const stoppedLine = useRef<number | null>(null);
   const anki = useAnkiWords();
   const mouseTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const progressRef = useRef(progress);
@@ -376,9 +381,29 @@ function Player({ episode, onEnded, onSendToLog }: {
     const cue = index === null ? undefined : cuesRef.current[index];
     if (!video || !cue) return;
     seekAllowed.current = true;
+    stoppedLine.current = null;
     video.currentTime = cue.start + offsetRef.current;
     void video.play();
   }
+
+  useEffect(() => savePlayerPrefs(prefs), [prefs]);
+
+  // Every frame, because the video's own time updates could overrun into the next line.
+  useEffect(() => {
+    if (!prefs.study) return;
+    let frame = requestAnimationFrame(function tick() {
+      const video = videoRef.current;
+      if (video && !video.paused && !video.seeking) {
+        const line = lineToStopAt(cuesRef.current, video.currentTime - offsetRef.current, stoppedLine.current);
+        if (line !== null) {
+          stoppedLine.current = line;
+          video.pause();
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [prefs.study]);
 
   function videoTime(): number {
     return (videoRef.current?.currentTime ?? 0) - offsetRef.current;
@@ -397,6 +422,8 @@ function Player({ episode, onEnded, onSendToLog }: {
       if (key === "r") replayLine();
       else if (key === "q") playLine(stepLine(cuesRef.current, videoTime(), -1));
       else if (key === "e") playLine(stepLine(cuesRef.current, videoTime(), 1));
+      else if (key === "s") setPrefs((p) => ({ ...p, subtitles: !p.subtitles }));
+      else if (key === "m") setPrefs((p) => ({ ...p, study: !p.study }));
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -555,7 +582,10 @@ function Player({ episode, onEnded, onSendToLog }: {
               if (!e.currentTarget.seeking) lastTime.current = e.currentTarget.currentTime;
               syncCue();
             }}
-            onSeeking={(e) => holdPlaceDuringLookup(e.currentTarget)}
+            onSeeking={(e) => {
+              stoppedLine.current = null;
+              holdPlaceDuringLookup(e.currentTarget);
+            }}
             onSeeked={() => {
               seekAllowed.current = false;
               // A seek always brings the list along, even right after a manual scroll.
@@ -568,7 +598,7 @@ function Player({ episode, onEnded, onSendToLog }: {
             }}
             onError={() => setVideoError(true)}
           />
-          {current && (
+          {current && prefs.subtitles && (
             <Overlay
               key={cueIndex}
               text={current.text}
@@ -584,7 +614,7 @@ function Player({ episode, onEnded, onSendToLog }: {
             <button
               type="button"
               className="replay-line"
-              title="Replay this line (R). Previous line: Q. Next line: E."
+              title="Replay this line (R). Previous line: Q. Next line: E. Subtitles: S. Mode: M."
               onClick={(e) => {
                 replayLine();
                 // Otherwise Space would replay again instead of pausing.
@@ -622,6 +652,36 @@ function Player({ episode, onEnded, onSendToLog }: {
             )}
             {alignment.state === "failed" && (
               <button type="button" title={alignment.message} onClick={prepareWords}>Word highlighting failed. Retry</button>
+            )}
+            {cues.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  aria-pressed={prefs.subtitles}
+                  title="Show or hide subtitles (S)"
+                  onClick={() => setPrefs((p) => ({ ...p, subtitles: !p.subtitles }))}
+                >
+                  Subtitles: {prefs.subtitles ? "on" : "off"}
+                </button>
+                <span className="mode-toggle" role="group" aria-label="Playback mode">
+                  <button
+                    type="button"
+                    aria-pressed={!prefs.study}
+                    title="Play straight through (M switches)"
+                    onClick={() => setPrefs((p) => ({ ...p, study: false }))}
+                  >
+                    Immersion
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={prefs.study}
+                    title="Pause at the end of every line (M switches)"
+                    onClick={() => setPrefs((p) => ({ ...p, study: true }))}
+                  >
+                    Study
+                  </button>
+                </span>
+              </>
             )}
             {cues.length > 0 && (
               <span className="offset">
@@ -695,7 +755,15 @@ function Player({ episode, onEnded, onSendToLog }: {
             disabled={progress.activeMs < 1000}
             onClick={() => {
               saveProgress(episode.show, progressRef.current);
-              onSendToLog(episode.show, Math.min(1440, Math.max(1, Math.round(progress.activeMs / 60_000))));
+              const heard = heardTokens(Object.keys(progress.lines), episode.id, tokens);
+              onSendToLog(episode.show, Math.min(1440, Math.max(1, Math.round(progress.activeMs / 60_000))), {
+                episode: episode.name,
+                lines: Object.keys(progress.lines).length,
+                words: stats.words,
+                uniqueWords: stats.uniqueWords,
+                // With no list from Anki, everything would wrongly count as unknown.
+                understanding: anki.source === "live" || anki.source === "saved" ? understanding(heard, anki.known) : null,
+              });
               // This page saves its progress as it closes, which would bring the logged time back.
               const logged = { activeMs: 0, lines: {} };
               progressRef.current = logged;
@@ -710,7 +778,7 @@ function Player({ episode, onEnded, onSendToLog }: {
       {cues.length > 0 && (
         <ol
           ref={transcriptRef}
-          className="cue-list panel"
+          className={prefs.subtitles ? "cue-list panel" : "cue-list panel subtitles-off"}
           lang="ja"
           aria-label="Subtitles"
           onWheel={() => (lastManualScroll.current = Date.now())}

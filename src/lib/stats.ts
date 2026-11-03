@@ -54,6 +54,8 @@ export interface WeekStats {
   minutes: number;
   /** Time-weighted average of rated sessions; null if none were rated. */
   comprehension: number | null;
+  /** Percent of vocabulary heard that was known; null if nothing measured it. */
+  knownPercent: number | null;
 }
 
 /** The last `count` weeks (Monday start), oldest first, including the current one. */
@@ -66,7 +68,11 @@ export function weeklyStats(sessions: Session[], today: Date, count: number): We
     const inWeek = sessions.filter((s) => s.date >= from && s.date < to);
     const rated = inWeek.filter((s) => s.comprehension !== null);
     const ratedMinutes = rated.reduce((sum, s) => sum + s.minutes, 0);
+    const heard = inWeek.flatMap((s) => s.stats?.understanding ?? []);
+    const vocabulary = heard.reduce((sum, u) => sum + u.words, 0);
     return {
+      knownPercent:
+        vocabulary > 0 ? (heard.reduce((sum, u) => sum + u.knownWords, 0) / vocabulary) * 100 : null,
       start,
       minutes: inWeek.reduce((sum, s) => sum + s.minutes, 0),
       comprehension:

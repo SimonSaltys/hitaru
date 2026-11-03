@@ -127,3 +127,23 @@ describe("milestones", () => {
     expect(crossedMilestone(9, 30)).toBe(25);
   });
 });
+
+describe("weeklyStats known words", () => {
+  const session = (words: number, knownWords: number | null, date = "2026-11-02") => ({
+    id: `${words}`, date, minutes: 10, category: "Anime & TV" as const, title: "", comprehension: null,
+    stats: {
+      episode: "E01", lines: 1, words, uniqueWords: words,
+      understanding: knownWords === null ? null : { words, knownWords, lines: 1, knownLines: 0 },
+    },
+  });
+
+  it("weights by words heard, and skips sessions with nothing measured", () => {
+    const [week] = weeklyStats([session(10, 5), session(30, 3), session(99, null)], new Date(2026, 10, 3), 1);
+    expect(week?.knownPercent).toBe(20);
+  });
+
+  it("is null for a week with no measurements", () => {
+    const [week] = weeklyStats([session(99, null)], new Date(2026, 10, 3), 1);
+    expect(week?.knownPercent).toBeNull();
+  });
+});

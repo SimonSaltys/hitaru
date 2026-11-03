@@ -934,6 +934,30 @@ button:disabled {
   font-size: 13px;
 }
 
+/* Timestamps stay, so a line can still be jumped to without seeing its text. */
+.cue-list.subtitles-off li > span {
+  visibility: hidden;
+}
+
+.mode-toggle {
+  display: inline-flex;
+}
+
+.mode-toggle button:first-child {
+  border-radius: 999px 0 0 999px;
+}
+
+.mode-toggle button:last-child {
+  margin-left: -1px;
+  border-radius: 0 999px 999px 0;
+}
+
+.mode-toggle button[aria-pressed="true"] {
+  background: var(--surface-2);
+  border-color: var(--known);
+  position: relative;
+}
+
 .mine-list {
   margin: 12px 0;
   padding: 0;

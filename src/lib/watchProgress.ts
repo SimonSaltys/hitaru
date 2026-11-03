@@ -2,6 +2,7 @@ const PROGRESS_KEY = "hitaru.watch.v1";
 const POSITIONS_KEY = "hitaru.positions.v1";
 const OFFSETS_KEY = "hitaru.subOffsets.v1";
 const LAST_KEY = "hitaru.lastEpisode.v1";
+const PREFS_KEY = "hitaru.playerPrefs.v1";
 
 /** Unlogged watching for one show. Cue keys stop rewatched lines from counting twice. */
 export interface ShowProgress {
@@ -53,6 +54,20 @@ export function loadOffset(id: string): number {
 
 export function saveOffset(id: string, seconds: number): void {
   write(OFFSETS_KEY, { ...read<Record<string, number>>(OFFSETS_KEY, {}), [id]: seconds });
+}
+
+export interface PlayerPrefs {
+  subtitles: boolean;
+  /** Pause at the end of every line, rather than playing straight through. */
+  study: boolean;
+}
+
+export function loadPlayerPrefs(): PlayerPrefs {
+  return { subtitles: true, study: false, ...read<Partial<PlayerPrefs>>(PREFS_KEY, {}) };
+}
+
+export function savePlayerPrefs(prefs: PlayerPrefs): void {
+  write(PREFS_KEY, prefs);
 }
 
 export function loadLastEpisode(): string | null {

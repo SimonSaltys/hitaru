@@ -100,6 +100,25 @@ describe("addNewSessions", () => {
 });
 
 describe("parseData", () => {
+  it("keeps session stats through a save and reload", () => {
+    const stats = {
+      episode: "E01",
+      lines: 3,
+      words: 12,
+      uniqueWords: 9,
+      understanding: { words: 8, knownWords: 2, lines: 3, knownLines: 1 },
+    };
+    const session = { id: "a", date: "2026-11-02", minutes: 5, category: "Anime & TV", title: "", comprehension: null, stats };
+    expect(parseData(JSON.stringify({ sessions: [session] })).sessions[0]?.stats).toEqual(stats);
+  });
+
+  it("drops malformed stats but keeps the session", () => {
+    const session = { id: "a", date: "2026-11-02", minutes: 5, stats: { episode: 1 } };
+    const [parsed] = parseData(JSON.stringify({ sessions: [session] })).sessions;
+    expect(parsed?.id).toBe("a");
+    expect(parsed).not.toHaveProperty("stats");
+  });
+
   it("rejects files that aren't backups", () => {
     expect(() => parseData("{}")).toThrow();
     expect(() => parseData("not json")).toThrow();

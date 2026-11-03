@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { cleanTitle, japaneseWords, latestLine, stepLine, subtitleStats } from "./subtitles";
+import { cleanTitle, japaneseWords, latestLine, lineToStopAt, stepLine, subtitleStats } from "./subtitles";
+
+describe("lineToStopAt", () => {
+  const cues = [{ start: 10, end: 12 }, { start: 12, end: 14 }];
+
+  it("stops just before a line ends, while it's still showing", () => {
+    expect(lineToStopAt(cues, 11, null)).toBeNull();
+    expect(lineToStopAt(cues, 11.97, null)).toBe(0);
+  });
+
+  it("lets playback carry on after stopping, then stops at the next line", () => {
+    expect(lineToStopAt(cues, 11.98, 0)).toBeNull();
+    expect(lineToStopAt(cues, 13.97, 0)).toBe(1);
+  });
+
+  it("does nothing between lines", () => {
+    expect(lineToStopAt(cues, 20, null)).toBeNull();
+  });
+});
 
 describe("line stepping", () => {
   const cues = [{ start: 10 }, { start: 20 }, { start: 30 }];

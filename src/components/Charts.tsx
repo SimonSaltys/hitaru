@@ -91,50 +91,88 @@ export function ComprehensionChart({ weeks }: { weeks: WeekStats[] }) {
   if (weeks.every((w) => w.comprehension === null)) {
     return <p className="empty">Rate your understanding when you log sessions to see this trend.</p>;
   }
-  return <ComprehensionPlot weeks={weeks} />;
+  return (
+    <TrendPlot
+      weeks={weeks}
+      value={(w) => w.comprehension}
+      min={1}
+      max={5}
+      left={74}
+      ticks={COMPREHENSION_LABELS.map((label, i) => ({ value: i + 1, label }))}
+      label="Average self-rated comprehension per week. Values are in the table below."
+      describe={(rating) => `${rating.toFixed(1)} of 5`}
+    />
+  );
 }
 
-function ComprehensionPlot({ weeks }: { weeks: WeekStats[] }) {
+export function KnownWordsChart({ weeks }: { weeks: WeekStats[] }) {
+  if (weeks.every((w) => w.knownPercent === null)) {
+    return <p className="empty">Send a session to the log from the Watch page to see this trend.</p>;
+  }
+  return (
+    <TrendPlot
+      weeks={weeks}
+      value={(w) => w.knownPercent}
+      min={0}
+      max={100}
+      left={PLOT.left + 6}
+      ticks={[0, 25, 50, 75, 100].map((value) => ({ value, label: `${value}%` }))}
+      label="Percent of the vocabulary heard that was known, per week. Values are in the table below."
+      describe={(known) => `${Math.round(known)}% of words known`}
+    />
+  );
+}
+
+function TrendPlot({ weeks, value, min, max, left, ticks, label, describe }: {
+  weeks: WeekStats[];
+  value: (week: WeekStats) => number | null;
+  min: number;
+  max: number;
+  left: number;
+  ticks: { value: number; label: string }[];
+  label: string;
+  describe: (value: number) => string;
+}) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const height = 200;
-  const left = 74;
   const plotW = width - left - PLOT.right;
   const plotH = height - PLOT.top - PLOT.bottom;
   const band = plotW / weeks.length;
   const x = (i: number) => left + band * (i + 0.5);
-  const y = (rating: number) => PLOT.top + plotH - ((rating - 1) / 4) * plotH;
+  const y = (v: number) => PLOT.top + plotH - ((v - min) / (max - min)) * plotH;
   const stride = labelStride(band);
 
-  // Unrated weeks break the line rather than implying a trend across the gap.
+  // Empty weeks break the line rather than implying a trend across the gap.
   const runs: string[] = [];
   let run: string[] = [];
   weeks.forEach((week, i) => {
-    if (week.comprehension === null) {
+    const v = value(week);
+    if (v === null) {
       if (run.length > 1) runs.push(run.join(" "));
       run = [];
     } else {
-      run.push(`${x(i)},${y(week.comprehension)}`);
+      run.push(`${x(i)},${y(v)}`);
     }
   });
   if (run.length > 1) runs.push(run.join(" "));
 
-  const lastRated = weeks.reduce((last, w, i) => (w.comprehension !== null ? i : last), -1);
+  const lastRated = weeks.reduce((last, w, i) => (value(w) !== null ? i : last), -1);
 
   return (
     <div ref={ref} className="chart">
       {width > 0 && (
-        <svg width={width} height={height} role="img" aria-label="Average self-rated comprehension per week. Values are in the table below.">
-          {COMPREHENSION_LABELS.map((label, i) => (
-            <g key={label}>
-              <line className="grid" x1={left} x2={width - PLOT.right} y1={y(i + 1)} y2={y(i + 1)} />
-              <text className="tick" x={left - 6} y={y(i + 1) + 4} textAnchor="end">{label}</text>
+        <svg width={width} height={height} role="img" aria-label={label}>
+          {ticks.map((tick) => (
+            <g key={tick.label}>
+              <line className="grid" x1={left} x2={width - PLOT.right} y1={y(tick.value)} y2={y(tick.value)} />
+              <text className="tick" x={left - 6} y={y(tick.value) + 4} textAnchor="end">{tick.label}</text>
             </g>
           ))}
           {runs.map((points) => <polyline key={points} className="line" points={points} />)}
           {weeks.map((week, i) => {
             const showLabel = (weeks.length - 1 - i) % stride === 0;
-            const rating = week.comprehension;
-            const text = `Week of ${shortDate(week.start)}: ${rating === null ? "not rated" : `${rating.toFixed(1)} of 5`}`;
+            const rating = value(week);
+            const text = `Week of ${shortDate(week.start)}: ${rating === null ? "no data" : describe(rating)}`;
             return (
               <g key={week.start.getTime()}>
                 {showLabel && (

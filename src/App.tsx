@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { ComprehensionChart, Heatmap, RankedBars, WeeklyChart } from "./components/Charts";
+import { ComprehensionChart, Heatmap, KnownWordsChart, RankedBars, WeeklyChart } from "./components/Charts";
 import { History } from "./components/History";
 import { LivePanel } from "./components/LivePanel";
 import { LogPanel } from "./components/LogPanel";
@@ -23,7 +23,7 @@ import {
   saveData,
   updateData,
 } from "./lib/storage";
-import type { AppData, Session, Settings } from "./lib/types";
+import type { AppData, Session, SessionStats, Settings } from "./lib/types";
 
 const CHART_WEEKS = 12;
 
@@ -142,7 +142,7 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
   }
 
   /** Logs straight away, then opens the new session in the form so it can still be rated. */
-  function sendWatchToLog(show: string, minutes: number) {
+  function sendWatchToLog(show: string, minutes: number, stats: SessionStats) {
     const unlogged = loadProgress(show);
     const session: Session = {
       id: newId(),
@@ -151,6 +151,7 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
       category: "Anime & TV",
       title: show,
       comprehension: null,
+      stats,
     };
     const nextSessions = [...sessions, session];
     commit({ ...data, sessions: nextSessions });
@@ -233,7 +234,8 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
     if (editing) {
       commit({
         ...data,
-        sessions: sessions.map((s) => (s.id === editing.id ? { ...fields, id: editing.id } : s)),
+        // Spread over the original, since the form doesn't carry the session's stats.
+        sessions: sessions.map((s) => (s.id === editing.id ? { ...s, ...fields } : s)),
       });
       setEditing(null);
       setToast({ message: "Session updated" });
@@ -344,7 +346,7 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
               <div className="table-scroll">
                 <table>
                   <thead>
-                    <tr><th>Week of</th><th className="num">Time</th><th className="num">Comprehension</th></tr>
+                    <tr><th>Week of</th><th className="num">Time</th><th className="num">Comprehension</th><th className="num">Words known</th></tr>
                   </thead>
                   <tbody>
                     {[...weeks].reverse().map((w) => (
@@ -352,12 +354,17 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
                         <td>{shortDate(w.start)}</td>
                         <td className="num">{formatMinutes(w.minutes)}</td>
                         <td className="num">{w.comprehension === null ? "—" : w.comprehension.toFixed(1)}</td>
+                        <td className="num">{w.knownPercent === null ? "—" : `${Math.round(w.knownPercent)}%`}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             </details>
+          </section>
+          <section className="panel">
+            <h2>Words known per week</h2>
+            <KnownWordsChart weeks={weeks} />
           </section>
         </div>
       </div>

@@ -1,4 +1,4 @@
-import { CATEGORIES, type AppData, type Category, type Session, type Settings } from "./types";
+import { CATEGORIES, type AppData, type Category, type Session, type SessionStats, type Settings } from "./types";
 
 const DATA_KEY = "hitaru.data.v1";
 const MIGRATED_KEY = "hitaru.data.v1.migrated";
@@ -13,6 +13,25 @@ export function newId(): string {
   return crypto.randomUUID();
 }
 
+function parseStats(raw: unknown): SessionStats | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const s = raw as Record<string, unknown>;
+  const count = (v: unknown) => typeof v === "number" && Number.isFinite(v) && v >= 0;
+  if (typeof s.episode !== "string" || !count(s.lines) || !count(s.words) || !count(s.uniqueWords)) return null;
+  const u = s.understanding as Record<string, unknown> | null | undefined;
+  const understanding =
+    u && count(u.words) && count(u.knownWords) && count(u.lines) && count(u.knownLines)
+      ? { words: u.words as number, knownWords: u.knownWords as number, lines: u.lines as number, knownLines: u.knownLines as number }
+      : null;
+  return {
+    episode: s.episode,
+    lines: s.lines as number,
+    words: s.words as number,
+    uniqueWords: s.uniqueWords as number,
+    understanding,
+  };
+}
+
 export function parseSession(raw: unknown): Session | null {
   if (typeof raw !== "object" || raw === null) return null;
   const s = raw as Record<string, unknown>;
@@ -24,6 +43,7 @@ export function parseSession(raw: unknown): Session | null {
     typeof rating === "number" && Number.isInteger(rating) && rating >= 1 && rating <= 5
       ? rating
       : null;
+  const stats = parseStats(s.stats);
   return {
     id: typeof s.id === "string" && s.id ? s.id : newId(),
     date: s.date,
@@ -31,6 +51,7 @@ export function parseSession(raw: unknown): Session | null {
     category,
     title: typeof s.title === "string" ? s.title : "",
     comprehension,
+    ...(stats && { stats }),
   };
 }
 

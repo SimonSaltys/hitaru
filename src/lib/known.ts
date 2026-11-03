@@ -56,6 +56,15 @@ export function understanding(cues: CueToken[][], known: KnownWords): Understand
   return result;
 }
 
+/** Tokens of the lines heard in one episode, from progress keys shaped like `${episodeId}:${line}`. */
+export function heardTokens(lineKeys: string[], episodeId: string, cues: CueToken[][]): CueToken[][] {
+  const prefix = `${episodeId}:`;
+  return lineKeys
+    .filter((key) => key.startsWith(prefix))
+    .map((key) => cues[Number(key.slice(prefix.length))])
+    .filter((tokens): tokens is CueToken[] => tokens !== undefined);
+}
+
 export function percent(part: number, whole: number): string {
   return whole === 0 ? "—" : `${Math.round((part / whole) * 100)}%`;
 }

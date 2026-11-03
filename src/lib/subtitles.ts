@@ -12,6 +12,16 @@ export function latestLine(cues: { start: number }[], time: number): number {
   return next === -1 ? cues.length - 1 : next - 1;
 }
 
+/**
+ * The line to pause at in study mode, if any. Stops just before the end so it's still on
+ * screen, and `stopped` is the line already paused at, so pressing play can carry on.
+ */
+export function lineToStopAt(cues: { start: number; end: number }[], time: number, stopped: number | null): number | null {
+  const line = cues.findIndex((cue) => time >= cue.start && time < cue.end);
+  if (line === -1 || line === stopped) return null;
+  return time >= cues[line]!.end - SEEK_TOLERANCE_SECONDS ? line : null;
+}
+
 /** Index of the line one step back (-1) or forward (1), or null if there isn't one to go to. */
 export function stepLine(cues: { start: number }[], time: number, step: -1 | 1): number | null {
   const latest = latestLine(cues, time);

@@ -18,6 +18,16 @@ export const COMPREHENSION_LABELS = [
   "Nearly all",
 ] as const;
 
+/** Measured when logging from the Watch page. */
+export interface SessionStats {
+  episode: string;
+  lines: number;
+  words: number;
+  uniqueWords: number;
+  /** How much of the vocabulary heard was known at the time; null if Anki's list wasn't available. */
+  understanding: { words: number; knownWords: number; lines: number; knownLines: number } | null;
+}
+
 export interface Session {
   id: string;
   date: string;
@@ -26,6 +36,7 @@ export interface Session {
   title: string;
   /** Self-rated 1-5, or null when not rated. */
   comprehension: number | null;
+  stats?: SessionStats;
 }
 
 export interface Settings {
