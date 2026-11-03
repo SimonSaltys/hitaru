@@ -206,3 +206,8 @@ Set these in the terminal before running `npm run dev`.
 npm test
 npm run build
 ```
+
+## License
+
+[MIT](LICENSE): free to use, change and share, including commercially, as long as the license
+notice is kept.
