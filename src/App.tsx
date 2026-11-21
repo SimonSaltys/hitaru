@@ -6,6 +6,7 @@ import { LogPanel } from "./components/LogPanel";
 import { Summary } from "./components/Summary";
 import { Tooltip } from "./components/Tooltip";
 import { WatchPage } from "./components/WatchPage";
+import { YouTubePage } from "./components/YouTubePage";
 import { clearProgress, loadProgress, saveProgress } from "./lib/watchProgress";
 import { useMpvCapture } from "./hooks/useMpvCapture";
 import { cleanTitle } from "./lib/subtitles";
@@ -23,6 +24,7 @@ import {
   saveData,
   updateData,
 } from "./lib/storage";
+import logo from "../assets/hitaru-logo.png";
 import type { AppData, Session, SessionStats, Settings } from "./lib/types";
 
 const CHART_WEEKS = 12;
@@ -32,9 +34,12 @@ interface Toast {
   undo?: () => void;
 }
 
-function useHashView(): "log" | "watch" {
-  const read = () => (window.location.hash === "#/watch" ? "watch" : "log");
-  const [view, setView] = useState<"log" | "watch">(read);
+type View = "log" | "watch" | "youtube";
+
+function useHashView(): View {
+  const read = (): View =>
+    window.location.hash === "#/watch" ? "watch" : window.location.hash === "#/youtube" ? "youtube" : "log";
+  const [view, setView] = useState<View>(read);
   useEffect(() => {
     const onChange = () => setView(read());
     window.addEventListener("hashchange", onChange);
@@ -141,28 +146,30 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  /** Logs straight away, then opens the new session in the form so it can still be rated. */
   function sendWatchToLog(show: string, minutes: number, stats: SessionStats) {
-    const unlogged = loadProgress(show);
-    const session: Session = {
-      id: newId(),
-      date: toKey(new Date()),
-      minutes,
-      category: "Anime & TV",
-      title: show,
-      comprehension: null,
-      stats,
-    };
+    logWatched(show, { minutes, category: "Anime & TV", title: show, stats });
+  }
+
+  function sendYouTubeToLog(progressKey: string, title: string, minutes: number) {
+    logWatched(progressKey, { minutes, category: "YouTube", title });
+  }
+
+  /** Logs straight away, then opens the new session in the form so it can still be rated. */
+  function logWatched(progressKey: string, fields: Pick<Session, "minutes" | "category" | "title" | "stats">) {
+    const { minutes } = fields;
+    const unlogged = loadProgress(progressKey);
+    const session: Session = { id: newId(), date: toKey(new Date()), comprehension: null, ...fields };
+    if (!session.stats) delete session.stats;
     const nextSessions = [...sessions, session];
     commit({ ...data, sessions: nextSessions });
-    clearProgress(show);
+    clearProgress(progressKey);
     setCapturePrefill(null);
     setEditing(session);
     setToast({
       message: addedMessage(nextSessions, minutes),
       undo: () => {
         commit(data);
-        saveProgress(show, unlogged);
+        saveProgress(progressKey, unlogged);
         setEditing(null);
       },
     });
@@ -261,6 +268,13 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
     commit({ ...data, settings: { ...settings, ...change } });
   }
 
+  const ankiDone = data.ankiDone === toKey(today);
+
+  function markAnkiDone() {
+    commit({ ...data, ankiDone: toKey(today) });
+    setToast({ message: "Anki done for today. いいね!", undo: () => commit(data) });
+  }
+
   function exportBackup() {
     const stamped = { ...data, lastBackup: toKey(new Date()) };
     const url = URL.createObjectURL(new Blob([JSON.stringify(stamped, null, 2)], { type: "application/json" }));
@@ -296,11 +310,15 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
   return (
     <main className="page">
       <header className="masthead">
-        <h1><span lang="ja">浸る</span> Hitaru</h1>
+        <h1>
+          <img src={logo} alt="" />
+          <span><span lang="ja">浸る</span> Hitaru</span>
+        </h1>
         <p className="secondary">Japanese immersion log</p>
         <nav className="nav" aria-label="Pages">
           <a href="#/" aria-current={view === "log" ? "page" : undefined}>Log</a>
           <a href="#/watch" aria-current={view === "watch" ? "page" : undefined}>Watch</a>
+          <a href="#/youtube" aria-current={view === "youtube" ? "page" : undefined}>YouTube</a>
         </nav>
       </header>
 
@@ -310,8 +328,17 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
         </p>
       )}
 
+      {!ankiDone && (
+        <div className="banner anki-reminder" role="status">
+          <span>Did you do your Anki today? Reviews first, then immersion.</span>
+          <button type="button" onClick={markAnkiDone}>Done for today</button>
+        </div>
+      )}
+
       {view === "watch" ? (
         <WatchPage onSendToLog={sendWatchToLog} />
+      ) : view === "youtube" ? (
+        <YouTubePage onSendToLog={sendYouTubeToLog} />
       ) : (
         <>
       <Summary sessions={sessions} settings={settings} today={today} />
@@ -325,14 +352,24 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
       />
 
       <div className="columns">
-        <LogPanel
-          sessions={sessions}
-          today={today}
-          editing={editing}
-          prefill={capturePrefill}
-          onSave={saveSession}
-          onCancelEdit={() => setEditing(null)}
-        />
+        <div className="stack">
+          <LogPanel
+            sessions={sessions}
+            today={today}
+            editing={editing}
+            prefill={capturePrefill}
+            onSave={saveSession}
+            onCancelEdit={() => setEditing(null)}
+          />
+          <section className="panel">
+            <h2>By type</h2>
+            <RankedBars rows={byCategory} empty="Log a session to see where your time goes." />
+          </section>
+          <section className="panel">
+            <h2>Top titles</h2>
+            <RankedBars rows={byTitle} empty="Add titles to your sessions to rank them here." />
+          </section>
+        </div>
         <div className="stack">
           <section className="panel">
             <h2>Hours per week</h2>
@@ -373,17 +410,6 @@ function Tracker({ data, setData }: { data: AppData; setData: (data: AppData) =>
         <h2>Every day you showed up</h2>
         <Heatmap sessions={sessions} today={today} />
       </section>
-
-      <div className="columns even">
-        <section className="panel">
-          <h2>By type</h2>
-          <RankedBars rows={byCategory} empty="Log a session to see where your time goes." />
-        </section>
-        <section className="panel">
-          <h2>Top titles</h2>
-          <RankedBars rows={byTitle} empty="Add titles to your sessions to rank them here." />
-        </section>
-      </div>
 
       <section className="panel">
         <h2>History</h2>

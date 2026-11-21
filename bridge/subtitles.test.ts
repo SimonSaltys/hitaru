@@ -130,6 +130,12 @@ describe("parseSrt", () => {
     ]);
   });
 
+  it("drops ASS overrides like {\\an8} that some SRT files carry", () => {
+    expect(parseSrt("1\n00:00:01,000 --> 00:00:02,000\n{\\an8}上だよ\\Nもう一行\n")).toEqual([
+      { start: 1, end: 2, text: "上だよ\nもう一行" },
+    ]);
+  });
+
   it("ignores malformed blocks and empty cues", () => {
     expect(parseSrt("garbage\n\n1\n00:00:01,000 --> 00:00:02,000\n\n")).toEqual([]);
   });

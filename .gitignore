@@ -2,3 +2,6 @@ node_modules
 dist
 aligner/.venv
 __pycache__
+.env
+.env.local
+AI_CONTEXT.md

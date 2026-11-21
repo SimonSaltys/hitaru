@@ -50,7 +50,7 @@ describe("subtitlesFor", () => {
   it("falls back to a matching .srt, or reports none", () => {
     const [withSrt, without] = listEpisodes(root);
     expect(subtitlesFor(resolveEpisode(withSrt!.id, root)!)).toMatchObject({
-      source: "E2.ja.srt",
+      source: "Separate subtitle file (.ja.srt)",
       cues: [{ text: "はい" }],
     });
     expect(subtitlesFor(resolveEpisode(without!.id, root)!)).toEqual({ source: null, cues: [] });

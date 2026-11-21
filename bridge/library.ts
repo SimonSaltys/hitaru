@@ -89,8 +89,8 @@ export function subtitlesFor(file: string): SubtitleTrack {
     track = { source: "Built-in Japanese track", cues: embedded };
   } else {
     const base = file.slice(0, -path.extname(file).length);
-    const sidecar = SIDECAR_SUFFIXES.map((suffix) => base + suffix).find((f) => fs.existsSync(f));
-    if (sidecar) track = { source: path.basename(sidecar), cues: parseSrt(fs.readFileSync(sidecar, "utf8")) };
+    const suffix = SIDECAR_SUFFIXES.find((s) => fs.existsSync(base + s));
+    if (suffix) track = { source: `Separate subtitle file (${suffix})`, cues: parseSrt(fs.readFileSync(base + suffix, "utf8")) };
   }
   cache.set(file, track);
   return track;

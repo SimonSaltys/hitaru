@@ -10,13 +10,19 @@ export const CATEGORIES = [
 
 export type Category = (typeof CATEGORIES)[number];
 
+/** Rated 1 to 7. Finer at the low end, where progress is slowest. */
 export const COMPREHENSION_LABELS = [
   "Lost",
+  "Single words",
   "Fragments",
+  "Some sentences",
   "The gist",
   "Most of it",
   "Nearly all",
 ] as const;
+
+/** Saved with the log, so ratings from the old 1 to 5 scale can be recognised and converted. */
+export const RATING_SCALE = COMPREHENSION_LABELS.length;
 
 /** Measured when logging from the Watch page. */
 export interface SessionStats {
@@ -49,4 +55,7 @@ export interface AppData {
   sessions: Session[];
   settings: Settings;
   lastBackup: string | null;
+  /** The last day Anki reviews were marked as done, as a date key. */
+  ankiDone: string | null;
+  ratingScale: typeof RATING_SCALE;
 }

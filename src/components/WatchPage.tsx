@@ -4,6 +4,7 @@ import type { Episode, SubtitleTrack } from "../../bridge/library";
 import type { Cue } from "../../bridge/subtitles";
 import type { CueToken } from "../../bridge/tokens";
 import { useAnkiWords } from "../hooks/useAnkiWords";
+import { episodeLabel, groupShows, type Show } from "../lib/episodes";
 import { heardTokens, isKnown, markKnown, percent, understanding, type KnownWords } from "../lib/known";
 import { wordsToLearn } from "../lib/mining";
 import { formatMinutes } from "../lib/stats";
@@ -35,6 +36,11 @@ const FOLLOW_PAUSE_MS = 5000;
 const CONTROLS_VISIBLE_MS = 3000;
 const ALIGNMENT_POLL_MS = 1000;
 const WORDS_SHOWN = 15;
+const PRESENCE_REPORT_MS = 5000;
+
+function reportPresence(watching: { show: string; episode: string; playing: boolean; activeMs: number } | null): void {
+  void fetch("/api/presence", { method: "POST", body: JSON.stringify(watching), keepalive: true }).catch(() => {});
+}
 
 function clock(seconds: number): string {
   const total = Math.floor(seconds);
@@ -64,12 +70,12 @@ function CueText({ text, tokens, known }: { text: string; tokens: CueToken[] | u
 }
 
 /** The current subtitle, following the audio word by word when timings exist for it. */
-function Overlay({ text, words, tokens, known, offset, video, onMouseMove }: {
+function Overlay({ text, words, tokens, known, video, onMouseMove }: {
   text: string;
+  /** Timed against the video itself, so the subtitle timing doesn't apply to them. */
   words: TimedWord[] | null;
   tokens: CueToken[] | undefined;
   known: KnownWords;
-  offset: number;
   video: React.RefObject<HTMLVideoElement | null>;
   onMouseMove: (e: React.MouseEvent) => void;
 }) {
@@ -79,11 +85,11 @@ function Overlay({ text, words, tokens, known, offset, video, onMouseMove }: {
   useEffect(() => {
     if (!words) return;
     let frame = requestAnimationFrame(function tick() {
-      if (video.current) setActive(activeWord(words, video.current.currentTime - offset));
+      if (video.current) setActive(activeWord(words, video.current.currentTime));
       frame = requestAnimationFrame(tick);
     });
     return () => cancelAnimationFrame(frame);
-  }, [words, offset, video]);
+  }, [words, video]);
 
   const shown = flowLines(text);
   return (
@@ -188,6 +194,91 @@ function WordsToLearn({ episodeId, cues, tokens, known, inAnki, offset, onPlay }
   );
 }
 
+/** Show tabs, season tabs and numbered episodes. Browsing another show doesn't stop the video. */
+function EpisodePicker({ shows, current, onSelect }: {
+  shows: Show[];
+  current: Episode;
+  onSelect: (id: string) => void;
+}) {
+  const [browsing, setBrowsing] = useState({ show: current.show, folder: current.folder });
+  // Follows along when the next episode starts on its own.
+  useEffect(() => setBrowsing({ show: current.show, folder: current.folder }), [current.show, current.folder]);
+
+  const show = shows.find((s) => s.name === browsing.show) ?? shows[0];
+  if (!show) return null;
+  const season = show.seasons.find((s) => s.episodes[0]?.folder === browsing.folder) ?? show.seasons[0]!;
+
+  const playing = shows.find((s) => s.name === current.show)?.seasons.find((s) => s.episodes[0]?.folder === current.folder);
+  const index = playing?.episodes.findIndex((e) => e.id === current.id) ?? -1;
+  const prev = playing?.episodes[index - 1];
+  const next = playing?.episodes[index + 1];
+  const label = episodeLabel(current.name, index + 1);
+
+  return (
+    <section className="episode-picker panel" aria-label="Choose an episode">
+      <div className="now-playing">
+        <button type="button" disabled={!prev} aria-label="Previous episode" onClick={() => prev && onSelect(prev.id)}>‹</button>
+        <div className="now-playing-text">
+          <span className="secondary">{current.show} · Episode {label.number}</span>
+          <strong title={current.name}>{label.title ?? `Episode ${label.number}`}</strong>
+        </div>
+        <button type="button" disabled={!next} aria-label="Next episode" onClick={() => next && onSelect(next.id)}>›</button>
+      </div>
+
+      {shows.length > 1 && (
+        <div className="chips" role="group" aria-label="Show">
+          {shows.map((s) => (
+            <button
+              key={s.name}
+              type="button"
+              className="chip"
+              aria-pressed={s === show}
+              onClick={() => setBrowsing({ show: s.name, folder: s.seasons[0]!.episodes[0]!.folder })}
+            >
+              {s.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {show.seasons.length > 1 && (
+        <div className="chips" role="group" aria-label="Season">
+          {show.seasons.map((s) => (
+            <button
+              key={s.label}
+              type="button"
+              className="chip"
+              aria-pressed={s === season}
+              onClick={() => setBrowsing({ show: show.name, folder: s.episodes[0]!.folder })}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <ol className="episode-grid">
+        {season.episodes.map((e, i) => {
+          const { number, title } = episodeLabel(e.name, i + 1);
+          return (
+            <li key={e.id}>
+              <button
+                type="button"
+                aria-current={e.id === current.id || undefined}
+                aria-label={`Episode ${number}${title ? `: ${title}` : ""}`}
+                title={title ?? e.name}
+                onClick={() => onSelect(e.id)}
+              >
+                {number}
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
 export function WatchPage({ onSendToLog }: {
   onSendToLog: (show: string, minutes: number, stats: SessionStats) => void;
 }) {
@@ -205,11 +296,12 @@ export function WatchPage({ onSendToLog }: {
       .catch(() => setEpisodes([]));
   }, []);
 
-  const folders = useMemo(() => {
-    const groups = new Map<string, Episode[]>();
-    for (const e of episodes ?? []) groups.set(e.folder, [...(groups.get(e.folder) ?? []), e]);
-    return [...groups];
-  }, [episodes]);
+  const shows = useMemo(() => groupShows(episodes ?? []), [episodes]);
+
+  function select(id: string) {
+    setSelectedId(id);
+    saveLastEpisode(id);
+  }
 
   const episode = episodes?.find((e) => e.id === selectedId) ?? null;
 
@@ -228,22 +320,7 @@ export function WatchPage({ onSendToLog }: {
 
   return (
     <div className="watch">
-      <label className="field">
-        Episode
-        <select
-          value={selectedId ?? ""}
-          onChange={(e) => {
-            setSelectedId(e.target.value);
-            saveLastEpisode(e.target.value);
-          }}
-        >
-          {folders.map(([folder, list]) => (
-            <optgroup key={folder} label={folder}>
-              {list.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-            </optgroup>
-          ))}
-        </select>
-      </label>
+      {episode && <EpisodePicker shows={shows} current={episode} onSelect={select} />}
       {episode && (
         <Player
           key={episode.id}
@@ -251,10 +328,7 @@ export function WatchPage({ onSendToLog }: {
           onEnded={() => {
             const list = episodes;
             const next = list[list.findIndex((e) => e.id === episode.id) + 1];
-            if (next && next.folder === episode.folder) {
-              setSelectedId(next.id);
-              saveLastEpisode(next.id);
-            }
+            if (next && next.folder === episode.folder) select(next.id);
           }}
           onSendToLog={onSendToLog}
         />
@@ -283,6 +357,7 @@ function Player({ episode, onEnded, onSendToLog }: {
   const [alignRequests, setAlignRequests] = useState(0);
   const [paused, setPaused] = useState(true);
   const [mouseActive, setMouseActive] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [lookupPause, setLookupPause] = useState(false);
   const [tokens, setTokens] = useState<CueToken[][]>([]);
   const [prefs, setPrefs] = useState(loadPlayerPrefs);
@@ -351,7 +426,12 @@ function Player({ episode, onEnded, onSendToLog }: {
   function prepareWords() {
     setAlignment({ state: "queued" });
     // Polling waits for the request, or it could read the old state and stop.
-    void fetch(`${src}/align`, { method: "POST" }).finally(() => setAlignRequests((n) => n + 1));
+    // The aligner listens where each line is heard, which the timing adjustment says.
+    void fetch(`${src}/align`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ offset }),
+    }).finally(() => setAlignRequests((n) => n + 1));
   }
 
   function keepControlsUp() {
@@ -424,9 +504,17 @@ function Player({ episode, onEnded, onSendToLog }: {
       else if (key === "e") playLine(stepLine(cuesRef.current, videoTime(), 1));
       else if (key === "s") setPrefs((p) => ({ ...p, subtitles: !p.subtitles }));
       else if (key === "m") setPrefs((p) => ({ ...p, study: !p.study }));
+      else if (key === "f") toggleFullscreen();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Esc and the browser can leave fullscreen too, so follow the document rather than the button.
+  useEffect(() => {
+    const onChange = () => setFullscreen(document.fullscreenElement === stageRef.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
 
   /** Puts the video back if something other than the viewer moves it during a lookup. */
@@ -481,6 +569,21 @@ function Player({ episode, onEnded, onSendToLog }: {
       if (video && video.currentTime > 0) savePosition(episode.id, video.currentTime);
     };
   }, [episode.id]);
+
+  // Tells the server what's on, for Discord. It forgets this if the reports stop.
+  useEffect(() => {
+    const current = () => ({
+      show: episode.show,
+      episode: episode.name,
+      playing: !paused,
+      activeMs: progressRef.current.activeMs,
+    });
+    reportPresence(current());
+    const interval = setInterval(() => reportPresence(current()), PRESENCE_REPORT_MS);
+    return () => clearInterval(interval);
+  }, [episode.show, episode.name, paused]);
+  // Only on leaving the player, since a clear sent between two reports could arrive after the second.
+  useEffect(() => () => reportPresence(null), []);
 
   function scrollToCue(index: number) {
     const list = transcriptRef.current;
@@ -605,7 +708,6 @@ function Player({ episode, onEnded, onSendToLog }: {
               words={alignment.state === "ready" ? alignment.cues[cueIndex] ?? null : null}
               tokens={tokens[cueIndex]}
               known={anki.known}
-              offset={offset}
               video={videoRef}
               onMouseMove={pauseForLookup}
             />
@@ -614,7 +716,7 @@ function Player({ episode, onEnded, onSendToLog }: {
             <button
               type="button"
               className="replay-line"
-              title="Replay this line (R). Previous line: Q. Next line: E. Subtitles: S. Mode: M."
+              title="Replay this line (R). Previous line: Q. Next line: E. Subtitles: S. Mode: M. Fullscreen: F."
               onClick={(e) => {
                 replayLine();
                 // Otherwise Space would replay again instead of pausing.
@@ -624,6 +726,29 @@ function Player({ episode, onEnded, onSendToLog }: {
               ↺ Replay line
             </button>
           )}
+          {/* Sits over the browser's own fullscreen button, which would leave the subtitles behind. */}
+          <button
+            type="button"
+            className="stage-fullscreen"
+            aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+            title={fullscreen ? "Exit fullscreen (F or Esc)" : "Fullscreen (F)"}
+            onClick={(e) => {
+              toggleFullscreen();
+              e.currentTarget.blur();
+            }}
+          >
+            {/* Sized so the icon is 12px, like the one it covers. */}
+            <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d={
+                  fullscreen
+                    ? "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"
+                    : "M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"
+                }
+              />
+            </svg>
+          </button>
         </div>
 
         {videoError && (
@@ -652,6 +777,15 @@ function Player({ episode, onEnded, onSendToLog }: {
             )}
             {alignment.state === "failed" && (
               <button type="button" title={alignment.message} onClick={prepareWords}>Word highlighting failed. Retry</button>
+            )}
+            {alignment.state === "ready" && alignment.offset !== offset && (
+              <button
+                type="button"
+                title={`Highlighting was made with timing ${alignment.offset.toFixed(2)}s, so some lines may be missing`}
+                onClick={prepareWords}
+              >
+                Timing changed. Redo word highlighting
+              </button>
             )}
             {cues.length > 0 && (
               <>
@@ -690,7 +824,7 @@ function Player({ episode, onEnded, onSendToLog }: {
                 <button type="button" aria-label="Show subtitles later" onClick={() => changeOffset(OFFSET_STEP)}>+</button>
               </span>
             )}
-            <button type="button" onClick={toggleFullscreen}>Fullscreen</button>
+            <button type="button" title="Fullscreen (F)" onClick={toggleFullscreen}>Fullscreen</button>
           </span>
         </div>
 

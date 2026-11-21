@@ -14,8 +14,10 @@ Everything has only been tested on Windows, and the commands below are for Power
 | See which words I know | [Anki](#anki) |
 | Make Anki cards from episodes | [Anki](#anki), then [Card creation](#card-creation) |
 | Highlight each word as it's spoken | [Word highlighting with Whisper](#word-highlighting-with-whisper) |
-| Log YouTube watching | [YouTube extension](#youtube-extension) |
+| Watch YouTube inside Hitaru and log it | Nothing: paste a link on the **YouTube** page |
+| Log YouTube watching on youtube.com | [YouTube extension](#youtube-extension) |
 | Log time from mpv | [mpv capture](#mpv-capture) |
+| Show what I'm watching on Discord | [Discord status](#discord-status) |
 
 ## Basic setup
 
@@ -176,15 +178,41 @@ To avoid typing that each time, add this line to `%APPDATA%\mpv\mpv.conf`:
 input-ipc-server=\\.\pipe\hitaru-mpv
 ```
 
+## Discord status
+
+Shows what you're watching on your Discord profile, with your streak, today's time and total
+hours, for example:
+
+```text
+Watching Hitaru
+Frieren · Episode 5
+🔥 12 days · 1h 20m today · 145h total
+```
+
+It works with the Watch page and with [mpv capture](#mpv-capture), and counts time you haven't
+logged yet. Discord needs an application to show this under, so make one once:
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) and click
+   **New Application**. Name it **Hitaru**, since the name appears after "Watching".
+2. Copy the **Application ID** from the page that opens.
+3. Copy `.env.example` to `.env`, put the ID after `HITARU_DISCORD_CLIENT_ID=`, and restart
+   `npm run dev`.
+
+Keep the Discord desktop app open, and check that **Settings → Activity Privacy → Share your
+detected activities with others** is on. The status clears when you leave the player or close
+mpv, or about 20 seconds after closing the browser tab.
+
 ## Settings
 
-Set these in the terminal before running `npm run dev`.
+Put these in a `.env` file (copy `.env.example`), or set them in the terminal before running
+`npm run dev`. The terminal wins if both are set.
 
 | Variable | What it changes | Default |
 |---|---|---|
 | `HITARU_LIBRARY` | Folder containing your shows | `Desktop\Shows` |
 | `HITARU_DATA` | Folder for your log and the dictionary | `Documents\Hitaru` |
 | `HITARU_FFMPEG` | Full path to ffmpeg | The copy included with the aligner |
+| `HITARU_DISCORD_CLIENT_ID` | Turns on the [Discord status](#discord-status) | Off |
 
 ## Troubleshooting
 
@@ -197,6 +225,9 @@ Set these in the terminal before running `npm run dev`.
 - **"ffmpeg wasn't found":** follow the ffmpeg step in [Card creation](#card-creation).
 - **A card fails or says the note type is missing:** check that `Kaishi 1.5k` is in Anki under
   **Tools → Manage Note Types**.
+- **No Discord status:** check that the Discord desktop app is open and `HITARU_DISCORD_CLIENT_ID`
+  is in `.env`, then restart `npm run dev`. "Invalid Client ID" in that terminal means the ID was
+  copied wrong.
 - **Word highlighting failed:** hover over the button to see the error. "Couldn't start the
   aligner" usually means uv isn't installed, or Hitaru was started before it was.
 

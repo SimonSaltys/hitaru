@@ -1,4 +1,4 @@
-import { CATEGORIES, type AppData, type Category, type Session, type SessionStats, type Settings } from "./types";
+import { CATEGORIES, RATING_SCALE, type AppData, type Category, type Session, type SessionStats, type Settings } from "./types.ts";
 
 const DATA_KEY = "hitaru.data.v1";
 const MIGRATED_KEY = "hitaru.data.v1.migrated";
@@ -6,7 +6,7 @@ const MIGRATED_KEY = "hitaru.data.v1.migrated";
 export const DEFAULT_SETTINGS: Settings = { weeklyGoalHours: 7, priorHours: 0 };
 
 function emptyData(): AppData {
-  return { sessions: [], settings: DEFAULT_SETTINGS, lastBackup: null };
+  return { sessions: [], settings: DEFAULT_SETTINGS, lastBackup: null, ankiDone: null, ratingScale: RATING_SCALE };
 }
 
 export function newId(): string {
@@ -40,7 +40,7 @@ export function parseSession(raw: unknown): Session | null {
   const category = CATEGORIES.includes(s.category as Category) ? (s.category as Category) : "Other";
   const rating = s.comprehension;
   const comprehension =
-    typeof rating === "number" && Number.isInteger(rating) && rating >= 1 && rating <= 5
+    typeof rating === "number" && Number.isInteger(rating) && rating >= 1 && rating <= RATING_SCALE
       ? rating
       : null;
   const stats = parseStats(s.stats);
@@ -65,18 +65,28 @@ function parseSettings(raw: unknown): Settings {
   };
 }
 
+// Lost, Fragments, The gist, Most of it and Nearly all keep their labels on the 7-point scale.
+const FIVE_TO_SEVEN = [1, 3, 5, 6, 7];
+
+/** Logs saved before the scale had a marker used 1 to 5. */
+function fromFivePointScale(session: Session): Session {
+  if (session.comprehension === null) return session;
+  return { ...session, comprehension: FIVE_TO_SEVEN[session.comprehension - 1] ?? null };
+}
+
 export function parseData(json: string): AppData {
   const raw: unknown = JSON.parse(json);
   if (typeof raw !== "object" || raw === null || !Array.isArray((raw as AppData).sessions)) {
     throw new Error("Not a Hitaru backup file");
   }
   const data = raw as Record<string, unknown>;
+  const sessions = (data.sessions as unknown[]).map(parseSession).filter((s): s is Session => s !== null);
   return {
-    sessions: (data.sessions as unknown[])
-      .map(parseSession)
-      .filter((s): s is Session => s !== null),
+    sessions: data.ratingScale === RATING_SCALE ? sessions : sessions.map(fromFivePointScale),
     settings: parseSettings(data.settings),
     lastBackup: typeof data.lastBackup === "string" ? data.lastBackup : null,
+    ankiDone: typeof data.ankiDone === "string" && /^\d{4}-\d{2}-\d{2}$/.test(data.ankiDone) ? data.ankiDone : null,
+    ratingScale: RATING_SCALE,
   };
 }
 
@@ -168,6 +178,8 @@ async function migrateFromBrowser(): Promise<void> {
     sessions: addNewSessions(latest.sessions, old.sessions),
     settings: exists ? latest.settings : old.settings,
     lastBackup: latest.lastBackup ?? old.lastBackup,
+    ankiDone: latest.ankiDone,
+    ratingScale: RATING_SCALE,
   }));
   localStorage.setItem(MIGRATED_KEY, new Date().toISOString());
 }

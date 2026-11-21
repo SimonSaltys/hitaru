@@ -20,13 +20,22 @@ export type AlignmentState =
   | { state: "queued" }
   | { state: "running"; done: number; total: number }
   | { state: "failed"; message: string }
-  /** `cues` has one entry per subtitle; null means that line isn't highlighted. */
-  | { state: "ready"; cues: (TimedWord[] | null)[] };
+  /**
+   * `cues` has one entry per subtitle; null means that line isn't highlighted. Word times are
+   * positions in the video itself, already including `offset`, the subtitle timing it was made with.
+   */
+  | { state: "ready"; cues: (TimedWord[] | null)[]; offset: number };
 
 interface StoredCue {
   text: string;
   status: string;
   words: TimedWord[];
+}
+
+interface Stored {
+  cues: StoredCue[];
+  /** Missing in files made before the timing was taken into account, which all used 0. */
+  offset?: number;
 }
 
 /** Kept beside the video, so the timings follow it if the folder moves. */
@@ -35,22 +44,31 @@ export function alignmentFile(video: string): string {
 }
 
 /** Reads saved timings, ignoring any line whose subtitle text has since changed. */
-export function readAlignment(video: string, cues: Cue[]): (TimedWord[] | null)[] | null {
-  let stored: { cues: StoredCue[] };
+export function readAlignment(video: string, cues: Cue[]): { cues: (TimedWord[] | null)[]; offset: number } | null {
+  let stored: Stored;
   try {
-    stored = JSON.parse(fs.readFileSync(alignmentFile(video), "utf8")) as { cues: StoredCue[] };
+    stored = JSON.parse(fs.readFileSync(alignmentFile(video), "utf8")) as Stored;
   } catch {
     return null;
   }
-  return cues.map((cue, i) => {
-    const saved = stored.cues[i];
-    return saved?.text === cue.text && saved.status === "aligned" ? saved.words : null;
-  });
+  return {
+    cues: cues.map((cue, i) => {
+      const saved = stored.cues[i];
+      return saved?.text === cue.text && saved.status === "aligned" ? saved.words : null;
+    }),
+    offset: typeof stored.offset === "number" ? stored.offset : 0,
+  };
+}
+
+/** Moves each line to where it's actually heard, so the aligner listens in the right place. */
+export function shiftCues(cues: Cue[], offset: number): Cue[] {
+  return offset === 0 ? cues : cues.map((cue) => ({ ...cue, start: cue.start + offset, end: cue.end + offset }));
 }
 
 interface Job {
   video: string;
   cues: Cue[];
+  offset: number;
 }
 
 /** Runs the Python aligner one episode at a time, since each one fills the GPU. */
@@ -67,13 +85,13 @@ export class AlignmentQueue {
     const failure = this.failures.get(video);
     if (failure) return { state: "failed", message: failure };
     const saved = readAlignment(video, cues);
-    return saved ? { state: "ready", cues: saved } : { state: "none" };
+    return saved ? { state: "ready", ...saved } : { state: "none" };
   }
 
-  enqueue(video: string, cues: Cue[]): void {
+  enqueue(video: string, cues: Cue[], offset = 0): void {
     if (this.running?.video === video || this.queue.some((job) => job.video === video)) return;
     this.failures.delete(video);
-    this.queue.push({ video, cues });
+    this.queue.push({ video, cues, offset });
     this.next();
   }
 
@@ -86,7 +104,7 @@ export class AlignmentQueue {
     this.running = { video: job.video, done: 0, total: job.cues.length };
 
     const cueFile = path.join(os.tmpdir(), `hitaru-cues-${process.pid}.json`);
-    fs.writeFileSync(cueFile, JSON.stringify(job.cues));
+    fs.writeFileSync(cueFile, JSON.stringify(shiftCues(job.cues, job.offset)));
     const child = spawn(
       "uv",
       ["run", "-q", "python", "-W", "ignore", "align.py", "--video", job.video, "--cues", cueFile, "--out", alignmentFile(job.video)],
@@ -132,6 +150,17 @@ export class AlignmentQueue {
       this.next();
     };
     child.on("error", (error) => finish(`Couldn't start the aligner: ${error.message}`));
-    child.on("close", (code) => finish(code === 0 ? null : lastError || `The aligner stopped with code ${code}`));
+    child.on("close", (code) => {
+      if (code !== 0) return finish(lastError || `The aligner stopped with code ${code}`);
+      try {
+        // Remembered so the player can tell when the timing has changed since.
+        const out = alignmentFile(job.video);
+        const stored = JSON.parse(fs.readFileSync(out, "utf8")) as Stored;
+        fs.writeFileSync(out, JSON.stringify({ ...stored, offset: job.offset }));
+        finish(null);
+      } catch (error) {
+        finish(`Couldn't save the word timings: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
   }
 }

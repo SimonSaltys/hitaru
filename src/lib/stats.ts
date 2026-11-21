@@ -1,5 +1,5 @@
-import { addDays, fromKey, startOfWeek, toKey } from "./dates";
-import type { Session } from "./types";
+import { addDays, fromKey, startOfWeek, toKey } from "./dates.ts";
+import type { Session } from "./types.ts";
 
 export const MILESTONES = [
   10, 25, 50, 100, 150, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000, 10000,

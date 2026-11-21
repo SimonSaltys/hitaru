@@ -96,11 +96,11 @@ export function ComprehensionChart({ weeks }: { weeks: WeekStats[] }) {
       weeks={weeks}
       value={(w) => w.comprehension}
       min={1}
-      max={5}
-      left={74}
+      max={COMPREHENSION_LABELS.length}
+      left={96}
       ticks={COMPREHENSION_LABELS.map((label, i) => ({ value: i + 1, label }))}
       label="Average self-rated comprehension per week. Values are in the table below."
-      describe={(rating) => `${rating.toFixed(1)} of 5`}
+      describe={(rating) => `${rating.toFixed(1)} of ${COMPREHENSION_LABELS.length}`}
     />
   );
 }

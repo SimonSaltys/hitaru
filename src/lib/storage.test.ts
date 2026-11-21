@@ -139,6 +139,22 @@ describe("parseData", () => {
     ]);
     expect(settings.weeklyGoalHours).toBe(7);
   });
+
+  const rated = (...ratings: (number | null)[]) =>
+    ratings.map((comprehension, i) => ({ id: `${i}`, date: "2026-10-28", minutes: 30, comprehension }));
+
+  it("moves ratings from the old five-point scale onto the same labels", () => {
+    const data = parseData(JSON.stringify({ sessions: rated(1, 2, 3, 4, 5, null) }));
+    expect(data.sessions.map((s) => s.comprehension)).toEqual([1, 3, 5, 6, 7, null]);
+    expect(data.ratingScale).toBe(7);
+  });
+
+  it("leaves ratings alone once the log is marked with the seven-point scale", () => {
+    const data = parseData(JSON.stringify({ sessions: rated(2, 4, 7), ratingScale: 7 }));
+    expect(data.sessions.map((s) => s.comprehension)).toEqual([2, 4, 7]);
+    // Converted only once: saving and loading again keeps them.
+    expect(parseData(JSON.stringify(data)).sessions.map((s) => s.comprehension)).toEqual([2, 4, 7]);
+  });
 });
 
 describe("mergeSessions", () => {

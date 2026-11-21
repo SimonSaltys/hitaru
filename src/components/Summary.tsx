@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { addDays, longDate, toKey } from "../lib/dates";
 import {
   dailyPace,
@@ -44,25 +45,32 @@ export function Summary(props: { sessions: Session[]; settings: Settings; today:
     }
   }
 
+  // Past the last milestone the sea stays full.
+  const level = milestone
+    ? Math.min(1, Math.max(0, (hours - milestone.previous) / (milestone.next - milestone.previous)))
+    : 1;
+
   return (
     <section className="summary">
-      <div className="panel hero">
+      <div className="panel hero" style={{ "--level": level } as CSSProperties}>
+        <div
+          className="hero-water"
+          role="progressbar"
+          aria-label={milestone ? `Progress to ${milestone.next} hours` : "Every milestone reached"}
+          aria-valuenow={Math.round(level * 100)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        />
         <h2>Total immersion</h2>
         <p className="hero-value">
           {hours.toLocaleString(undefined, { maximumFractionDigits: 1 })}
           <span> hours</span>
         </p>
         {milestone && (
-          <>
-            <Meter
-              value={(hours - milestone.previous) / (milestone.next - milestone.previous)}
-              label={`Progress to ${milestone.next} hours`}
-            />
-            <p className="secondary">
-              {formatMinutes((milestone.next - hours) * 60)} to go until {milestone.next.toLocaleString()} hours.
-              {projection && ` ${projection}`}
-            </p>
-          </>
+          <p>
+            {formatMinutes((milestone.next - hours) * 60)} to go until {milestone.next.toLocaleString()} hours.
+            {projection && ` ${projection}`}
+          </p>
         )}
       </div>
       <div className="tiles">

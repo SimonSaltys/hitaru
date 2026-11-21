@@ -4,8 +4,10 @@ import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Connect, Plugin } from "vite";
 import { AlignmentQueue } from "./alignment.ts";
+import { cleanTitle } from "../src/lib/subtitles.ts";
 import { allWords, greenWords } from "./anki.ts";
 import { Capture, OBSERVED_PROPERTIES, type CaptureEvent } from "./capture.ts";
+import { buildActivity, DiscordPresence, episodeLabel, type Watching } from "./discord.ts";
 import { contentType, listEpisodes, resolveEpisode, subtitlesFor } from "./library.ts";
 import { CardError, createCard } from "./mining.ts";
 import { DataStore, defaultDataDir, isLogData } from "./store.ts";
@@ -13,6 +15,11 @@ import { loadTokenizer, toHiragana, tokenizeCue, type CueToken } from "./tokens.
 
 const MAX_DATA_BYTES = 20 * 1024 * 1024;
 const MAX_CARD_REQUEST_BYTES = 10 * 1024;
+const MAX_PRESENCE_BYTES = 2 * 1024;
+// The Watch page reports every few seconds; silence means the tab closed.
+const PAGE_WATCHING_EXPIRES_MS = 20_000;
+// Refreshes the elapsed stats and drops a closed tab even when nothing else changes.
+const PRESENCE_REFRESH_MS = 15_000;
 
 export const MPV_PIPE = process.platform === "win32" ? "\\\\.\\pipe\\hitaru-mpv" : "/tmp/hitaru-mpv";
 // Short, so the opening subtitles aren't missed while mpv starts up.
@@ -132,7 +139,10 @@ function attach(middlewares: Connect.Server): void {
   const send = (client: ServerResponse, event: CaptureEvent) => {
     client.write(`data: ${JSON.stringify(event)}\n\n`);
   };
-  const capture = new Capture((event) => clients.forEach((client) => send(client, event)));
+  const capture = new Capture((event) => {
+    clients.forEach((client) => send(client, event));
+    if (event.type === "snapshot") updatePresence();
+  });
   connectToMpv(capture);
 
   middlewares.use("/api", (req, res, next) => {
@@ -147,6 +157,75 @@ function attach(middlewares: Connect.Server): void {
   const alignments = new AlignmentQueue();
   const tokenCache = new Map<string, CueToken[][]>();
   const store = new DataStore(defaultDataDir());
+
+  const discordClientId = process.env.HITARU_DISCORD_CLIENT_ID?.trim();
+  const discord = discordClientId ? new DiscordPresence(discordClientId) : null;
+  let pageWatching: { watching: Watching; at: number } | null = null;
+
+  /** mpv and the Watch page, whichever is playing, preferring mpv. */
+  function currentWatching(): Watching | null {
+    const mpv = capture.snapshot();
+    const fromMpv: Watching | null =
+      mpv.connected && mpv.title
+        ? { show: cleanTitle(mpv.title), episode: null, playing: mpv.playing, activeMs: mpv.activeMs }
+        : null;
+    const fromPage = pageWatching && Date.now() - pageWatching.at < PAGE_WATCHING_EXPIRES_MS ? pageWatching.watching : null;
+    return [fromMpv, fromPage].find((w) => w?.playing) ?? fromMpv ?? fromPage;
+  }
+
+  function updatePresence(): void {
+    if (!discord) return;
+    const watching = currentWatching();
+    let log: string | null = null;
+    try {
+      log = store.read().text;
+    } catch {
+      // Shown without the logged figures rather than not at all.
+    }
+    try {
+      discord.set(watching ? buildActivity(watching, log, new Date()) : null);
+    } catch {
+      discord.set(watching ? buildActivity(watching, null, new Date()) : null);
+    }
+  }
+  if (discord) setInterval(updatePresence, PRESENCE_REFRESH_MS).unref();
+
+  middlewares.use("/api/presence", (req, res, next) => {
+    if (req.method !== "POST") return next();
+    if (!isSameOrigin(req)) {
+      res.statusCode = 403;
+      res.end();
+      return;
+    }
+    readBody(req, MAX_PRESENCE_BYTES)
+      .then((text) => {
+        const body = JSON.parse(text ?? "null") as Partial<{ show: unknown; episode: unknown; playing: unknown; activeMs: unknown }> | null;
+        if (
+          body &&
+          typeof body.show === "string" &&
+          body.show &&
+          typeof body.episode === "string" &&
+          typeof body.playing === "boolean" &&
+          typeof body.activeMs === "number" &&
+          Number.isFinite(body.activeMs) &&
+          body.activeMs >= 0
+        ) {
+          pageWatching = {
+            watching: { show: body.show, episode: episodeLabel(body.episode), playing: body.playing, activeMs: body.activeMs },
+            at: Date.now(),
+          };
+        } else {
+          pageWatching = null;
+        }
+        updatePresence();
+        res.statusCode = 204;
+        res.end();
+      })
+      .catch(() => {
+        res.statusCode = 400;
+        res.end();
+      });
+  });
 
   middlewares.use("/api/data", (req, res, next) => {
     if (req.method === "GET") {
@@ -250,9 +329,18 @@ function attach(middlewares: Connect.Server): void {
           });
         return;
       }
-      alignments.enqueue(file, subtitlesFor(file).cues);
-      res.statusCode = 204;
-      res.end();
+      readBody(req, MAX_CARD_REQUEST_BYTES)
+        .then((body) => {
+          const { offset } = (JSON.parse(body || "null") ?? {}) as { offset?: unknown };
+          const shift = typeof offset === "number" && Number.isFinite(offset) ? offset : 0;
+          alignments.enqueue(file, subtitlesFor(file).cues, shift);
+          res.statusCode = 204;
+          res.end();
+        })
+        .catch(() => {
+          res.statusCode = 400;
+          res.end();
+        });
       return;
     }
     if (req.method !== "GET") return next();

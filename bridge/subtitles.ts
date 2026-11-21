@@ -137,7 +137,7 @@ export function readMkvJapaneseCues(path: string): Cue[] | null {
       const raw = Buffer.from(reader.read(payloadStart, blockEnd - payloadStart))
         .toString("utf8")
         .replace(/\r\n?/g, "\n");
-      const text = selected.codec === "S_TEXT/UTF8" ? raw.trim() : assText(raw);
+      const text = selected.codec === "S_TEXT/UTF8" ? srtText(raw) : assText(raw);
       if (!text) return;
       const start = ((clusterMs + head.readInt16BE(trackLength)) * timestampScale) / 1e9;
       const seconds = duration === null ? FALLBACK_CUE_SECONDS : (duration * timestampScale) / 1e9;
@@ -202,6 +202,15 @@ function srtSeconds(h: string, m: string, s: string, ms: string): number {
   return Number(h) * 3600 + Number(m) * 60 + Number(s) + Number(ms) / 1000;
 }
 
+/** Removes SRT's HTML-style tags and the ASS overrides like {\an8} that some SRT files carry. */
+function srtText(body: string): string {
+  return body
+    .replace(/<[^>]+>/g, "")
+    .replace(/\{\\[^}]*\}/g, "")
+    .replace(/\\[Nn]/g, "\n")
+    .trim();
+}
+
 export function parseSrt(content: string): Cue[] {
   const cues: Cue[] = [];
   const blocks = content.replace(/^﻿/, "").replace(/\r\n?/g, "\n").split(/\n{2,}/);
@@ -211,7 +220,7 @@ export function parseSrt(content: string): Cue[] {
     );
     if (!match) continue;
     const [, h1, m1, s1, ms1, h2, m2, s2, ms2, body] = match as unknown as string[];
-    const text = body!.replace(/<[^>]+>/g, "").trim();
+    const text = srtText(body!);
     if (text) {
       cues.push({
         start: srtSeconds(h1!, m1!, s1!, ms1!.padEnd(3, "0")),

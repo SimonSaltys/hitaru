@@ -6,6 +6,7 @@ const list = document.getElementById("videos");
 const empty = document.getElementById("empty");
 const waiting = document.getElementById("waiting");
 const logAll = document.getElementById("log-all");
+const clearAll = document.getElementById("clear-all");
 
 function minutes(ms) {
   return Math.max(1, Math.round(ms / 60_000));
@@ -37,6 +38,31 @@ async function logVideos(videos) {
   await chrome.storage.local.set({ outbox: [...outbox, ...videos.map(toSession)] });
   await chrome.storage.local.remove(videos.map((video) => `watch:${video.videoId}`));
 }
+
+/** Drops every timed video, including the short ones the list hides. */
+async function clearWatched() {
+  const everything = await chrome.storage.local.get(null);
+  await chrome.storage.local.remove(Object.keys(everything).filter((key) => key.startsWith("watch:")));
+}
+
+// Clearing can't be undone, so the first click only arms the button.
+let clearArmed = false;
+let disarmTimer;
+clearAll.addEventListener("click", () => {
+  if (clearArmed) {
+    clearTimeout(disarmTimer);
+    clearArmed = false;
+    clearAll.textContent = "Clear all";
+    void clearWatched();
+    return;
+  }
+  clearArmed = true;
+  clearAll.textContent = "Click again to clear";
+  disarmTimer = setTimeout(() => {
+    clearArmed = false;
+    clearAll.textContent = "Clear all";
+  }, 3000);
+});
 
 function button(label, className, onClick) {
   const element = document.createElement("button");
@@ -82,6 +108,7 @@ async function render() {
   logAll.hidden = videos.length < 2;
   logAll.textContent = `Log all ${videos.length}`;
   logAll.onclick = () => logVideos(videos);
+  clearAll.hidden = videos.length < 2;
 
   waiting.hidden = outbox.length === 0;
   if (outbox.length > 0) {
